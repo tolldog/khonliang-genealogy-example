@@ -109,7 +109,8 @@ class TreeAnalyzer:
                 severity = "info"
 
             place = person.birth_place or person.death_place or ""
-            query_parts = [person.full_name]
+            search_name = self._search_name(person)
+            query_parts = [f'"{search_name}"']
             if place:
                 query_parts.append(place.split(",")[0].strip())
             if year:
@@ -159,7 +160,7 @@ class TreeAnalyzer:
                     person_name=person.full_name,
                     description=f"Missing: {', '.join(missing)}",
                     severity="low" if len(missing) <= 2 else "medium",
-                    research_query=f"{person.full_name} genealogy records",
+                    research_query=f'"{self._search_name(person)}" genealogy records',
                     metadata={"missing_fields": missing},
                 ))
 
@@ -242,7 +243,7 @@ class TreeAnalyzer:
                         description=f"Husband unknown for {wife.full_name}",
                         severity="low",
                         research_query=(
-                            f"{wife.full_name} husband marriage "
+                            f'"{self._search_name(wife)}" husband marriage '
                             f"{wife.birth_place or ''}"
                         ),
                     ))
@@ -257,7 +258,7 @@ class TreeAnalyzer:
                         description=f"Wife unknown for {husb.full_name}",
                         severity="low",
                         research_query=(
-                            f"{husb.full_name} wife marriage "
+                            f'"{self._search_name(husb)}" wife marriage '
                             f"{husb.birth_place or ''}"
                         ),
                     ))
@@ -288,7 +289,7 @@ class TreeAnalyzer:
                     ),
                     severity="medium",
                     research_query=(
-                        f"{ancestor.full_name} "
+                        f'"{self._search_name(ancestor)}" '
                         f"{place.split(',')[0].strip() if place else ''} "
                         f"{year or ''} genealogy parents"
                     ).strip(),
@@ -331,3 +332,11 @@ class TreeAnalyzer:
             return None
         match = re.search(r"\d{4}", date_str)
         return int(match.group()) if match else None
+
+    @staticmethod
+    def _search_name(person: Person) -> str:
+        """Build a search-friendly name: first + last, drop middle names."""
+        given = person.given_name.split()[0] if person.given_name else ""
+        surname = person.surname or ""
+        name = f"{given} {surname}".strip()
+        return name or person.full_name
