@@ -340,3 +340,107 @@ class TreeAnalyzer:
         surname = person.surname or ""
         name = f"{given} {surname}".strip()
         return name or person.full_name
+
+    # ------------------------------------------------------------------
+    # Tree queries
+    # ------------------------------------------------------------------
+
+    def query_persons(self, criteria: str) -> List[Person]:
+        """
+        Filter persons by natural language criteria.
+
+        Parses keywords from the criteria string:
+        - Sex: "males", "females", "men", "women"
+        - Place: "born in ohio", "from maryland", "in virginia"
+        - Year: "before 1920", "after 1800", "between 1850 and 1900"
+        - Surname: "surname toll", "last name thomas"
+        - Missing: "no parents", "no death date", "unknown"
+
+        Example:
+            analyzer.query_persons("males born in ohio before 1920")
+            analyzer.query_persons("females surname Thomas after 1900")
+            analyzer.query_persons("no parents born in maryland")
+        """
+        criteria_lower = criteria.lower()
+        results = list(self.tree.persons.values())
+
+        # Sex filter
+        if any(w in criteria_lower for w in ["male", "males", "men", "man"]):
+            results = [p for p in results if p.sex == "M"]
+        elif any(w in criteria_lower for w in ["female", "females", "women", "woman"]):
+            results = [p for p in results if p.sex == "F"]
+
+        # Place filter — extract place after "born in", "from", "in"
+        # Stop at year keywords or end of string
+        place_match = re.search(
+            r"(?:born in|from|in)\s+([a-z][a-z\s,]+?)(?:\s+(?:before|after|between|no\s|surname|last)|$)",
+            criteria_lower,
+        )
+        if place_match:
+            place = place_match.group(1).strip().rstrip(",")
+            # "born in" → birth only. "from" or "in" → either
+            born_only = "born in" in criteria_lower
+            results = [
+                p for p in results
+                if (place in (p.birth_place or "").lower())
+                or (not born_only and place in (p.death_place or "").lower())
+            ]
+
+        # Year filters
+        before_match = re.search(r"before\s+(\d{4})", criteria_lower)
+        after_match = re.search(r"after\s+(\d{4})", criteria_lower)
+        between_match = re.search(
+            r"between\s+(\d{4})\s+and\s+(\d{4})", criteria_lower
+        )
+
+        if between_match:
+            y1 = int(between_match.group(1))
+            y2 = int(between_match.group(2))
+            results = [
+                p for p in results
+                if self._extract_year(p.birth_date)
+                and y1 <= self._extract_year(p.birth_date) <= y2
+            ]
+        elif before_match:
+            year = int(before_match.group(1))
+            results = [
+                p for p in results
+                if self._extract_year(p.birth_date)
+                and self._extract_year(p.birth_date) < year
+            ]
+        elif after_match:
+            year = int(after_match.group(1))
+            results = [
+                p for p in results
+                if self._extract_year(p.birth_date)
+                and self._extract_year(p.birth_date) > year
+            ]
+
+        # Surname filter
+        surname_match = re.search(
+            r"(?:surname|last name)\s+(\w+)", criteria_lower
+        )
+        if surname_match:
+            surname = surname_match.group(1)
+            results = [
+                p for p in results
+                if surname in p.surname.lower()
+            ]
+
+        # Missing data filters
+        if "no parents" in criteria_lower:
+            results = [
+                p for p in results
+                if not self.tree.get_parents(p.xref)
+            ]
+        if "no death" in criteria_lower:
+            results = [p for p in results if not p.death_date]
+        if "no birth" in criteria_lower:
+            results = [p for p in results if not p.birth_date]
+
+        # Sort by birth year
+        results.sort(
+            key=lambda p: self._extract_year(p.birth_date) or 9999
+        )
+
+        return results

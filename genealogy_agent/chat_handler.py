@@ -38,6 +38,8 @@ class ResearchChatHandler:
         "!google", "!fetch",
         # Tree analysis
         "!gaps", "!dead-ends", "!anomalies",
+        # Batch research
+        "!researchwho",
         # Knowledge management
         "!knowledge", "!prune", "!promote", "!demote",
         "!axiom",
@@ -90,6 +92,8 @@ class ResearchChatHandler:
             return self._handle_dead_ends(message)
         if msg_lower.startswith("!anomalies"):
             return self._handle_anomalies()
+        if msg_lower.startswith("!researchwho"):
+            return await self._handle_researchwho(message)
 
         # Ingestion commands
         if msg_lower.startswith("!ingest-file"):
@@ -622,6 +626,109 @@ class ResearchChatHandler:
             "content": "\n".join(lines),
             "role": "analyst",
             "reason": "anomalies",
+        }
+
+    # ------------------------------------------------------------------
+    # Batch research
+    # ------------------------------------------------------------------
+
+    async def _handle_researchwho(self, message: str) -> Dict[str, Any]:
+        """
+        Find persons matching criteria, then queue web lookups for each.
+
+        !researchwho males born in ohio before 1920
+        !researchwho females surname Thomas no parents
+        !researchwho born in maryland between 1700 and 1800
+        """
+        if not self.tree:
+            return {"type": "error", "content": "No tree loaded."}
+
+        criteria = message.split(None, 1)[1].strip() if " " in message else ""
+        if not criteria:
+            return {
+                "type": "error",
+                "content": (
+                    "Usage: !researchwho <criteria>\n"
+                    "Examples:\n"
+                    "  !researchwho males born in ohio before 1920\n"
+                    "  !researchwho females surname Thomas no parents\n"
+                    "  !researchwho born in maryland between 1700 and 1800"
+                ),
+            }
+
+        from genealogy_agent.tree_analysis import TreeAnalyzer
+
+        analyzer = TreeAnalyzer(self.tree)
+        matches = analyzer.query_persons(criteria)
+
+        if not matches:
+            return {
+                "type": "response",
+                "content": f"No persons match: {criteria}",
+                "role": "analyst",
+                "reason": "researchwho",
+            }
+
+        # Show matches and queue research
+        lines = [f"Found {len(matches)} persons matching: {criteria}\n"]
+        queued = 0
+        max_research = 10  # don't queue more than 10
+
+        for p in matches[:20]:
+            line = f"  {p.display}"
+            lines.append(line)
+
+            # Queue web lookup for each (up to max)
+            if queued < max_research:
+                search_name = analyzer._search_name(p)
+                import re
+
+                year = None
+                year_match = re.search(r"\d{4}", p.birth_date or "")
+                if year_match:
+                    year = year_match.group()
+
+                place = ""
+                if p.birth_place:
+                    place = p.birth_place.split(",")[0].strip()
+
+                query = f'"{search_name}"'
+                if place:
+                    query += f" {place}"
+                if year:
+                    query += f" {year}"
+                query += " genealogy"
+
+                try:
+                    from khonliang.research.models import ResearchTask
+
+                    self.pool.submit(ResearchTask(
+                        task_type="person_lookup",
+                        query=query,
+                        scope="genealogy",
+                        source="researchwho",
+                        priority=-1,
+                    ))
+                    queued += 1
+                    lines.append(f"    → Queued: {query}")
+                except Exception:
+                    logger.debug("Failed to queue research", exc_info=True)
+
+        if len(matches) > 20:
+            lines.append(f"\n  ... and {len(matches) - 20} more (showing first 20)")
+
+        lines.append(f"\nQueued {queued} web lookups (background)")
+
+        return {
+            "type": "response",
+            "content": "\n".join(lines),
+            "role": "analyst",
+            "reason": "researchwho",
+            "metadata": {
+                "matches": len(matches),
+                "queued": queued,
+                "criteria": criteria,
+            },
         }
 
     def get_status(self) -> Dict[str, Any]:
