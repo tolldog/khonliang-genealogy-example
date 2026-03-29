@@ -123,15 +123,30 @@ class ResponseEvaluator:
             r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", response
         )
 
-        # Filter out common non-name phrases
+        # Filter out common non-name phrases (places, institutions, events)
         skip = {
             "United States", "North America", "New York", "New Jersey",
             "New England", "St Mary", "St Marys", "Civil War",
             "World War", "Family Tree", "Great Britain",
+            "National Park", "Library Congress", "Civil War Soldiers",
+            "Sailors System", "County Ohio", "County Indiana",
+            "County Kentucky", "County Maryland", "County Virginia",
+            "County Pennsylvania", "Adams County", "Seneca County",
+            "Hancock County", "Blackford County", "Harrison County",
+            "Fairfield County", "Delaware County",
         }
+        # Also skip anything containing common institutional words
+        institutional = [
+            "system", "database", "collection", "records", "service",
+            "society", "library", "archive", "museum", "university",
+            "county", "township", "parish",
+        ]
 
         for name in set(name_pattern):
             if name in skip or len(name.split()) > 3:
+                continue
+            # Skip institutional/geographic phrases
+            if any(word in name.lower() for word in institutional):
                 continue
 
             # Check if this looks like a person name and is in the tree
