@@ -9,6 +9,7 @@ Intercepts messages starting with ! prefixes:
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -656,8 +657,6 @@ class ResearchChatHandler:
                     "  !researchwho born in maryland between 1700 and 1800"
                 ),
             }
-
-        import re
 
         from genealogy_agent.tree_analysis import TreeAnalyzer
 

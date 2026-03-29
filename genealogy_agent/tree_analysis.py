@@ -364,10 +364,10 @@ class TreeAnalyzer:
         criteria_lower = criteria.lower()
         results = list(self.tree.persons.values())
 
-        # Sex filter (check female first to avoid "male" matching inside "female")
-        if any(w in criteria_lower.split() for w in ["female", "females", "women", "woman"]):
+        # Sex filter (use word boundaries to avoid "male" matching inside "female")
+        if re.search(r"\b(female|females|woman|women)\b", criteria_lower):
             results = [p for p in results if p.sex == "F"]
-        elif any(w in criteria_lower.split() for w in ["male", "males", "men", "man"]):
+        elif re.search(r"\b(male|males|man|men)\b", criteria_lower):
             results = [p for p in results if p.sex == "M"]
 
         # Place filter — extract place after "born in", "from", "in"
