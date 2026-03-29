@@ -27,9 +27,10 @@ genealogy load data/family.ged
 genealogy search data/family.ged "Smith"
 genealogy chat data/family.ged
 
-# Start the chat server (reads config.yaml or env vars)
-# GEDCOM path: set in config.yaml, GEDCOM_FILE env var, or defaults to data/family.ged
-python -m genealogy_agent.server
+# Start the chat server — GEDCOM path comes from config.yaml or env var
+# Option A: edit app.gedcom in config.yaml (see Configuration section below)
+# Option B: override on the command line:
+GEDCOM_FILE=data/family.ged python -m genealogy_agent.server
 
 # Connect via CLI
 python -m genealogy_agent.chat_client
@@ -60,8 +61,10 @@ python -m genealogy_agent.chat_client
 
 ## Tool Interface (for external LLMs)
 
+The tool module reads the GEDCOM path from `GEDCOM_FILE` env var (or `app.gedcom` in `config.yaml`):
+
 ```bash
-python -m genealogy_agent.tool summary
+GEDCOM_FILE=data/family.ged python -m genealogy_agent.tool summary
 python -m genealogy_agent.tool person "Timothy Toll"
 python -m genealogy_agent.tool ancestors "Timothy Toll" --generations 4
 python -m genealogy_agent.tool migration "Timothy Toll"
