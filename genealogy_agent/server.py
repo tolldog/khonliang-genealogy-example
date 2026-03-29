@@ -20,6 +20,7 @@ from khonliang.research import ResearchPool, ResearchTrigger
 from genealogy_agent.chat_handler import ResearchChatHandler
 from genealogy_agent.config import load_config
 from genealogy_agent.gedcom_parser import GedcomTree
+from genealogy_agent.intent import IntentClassifier
 from genealogy_agent.self_eval import ResponseEvaluator
 from genealogy_agent.researchers import TreeResearcher, WebSearchResearcher
 from genealogy_agent.roles import FactCheckerRole, NarratorRole, ResearcherRole
@@ -41,15 +42,20 @@ class GenealogyChat(ChatServer):
     - Evaluation issues trigger automatic research to fill gaps
     """
 
-    def __init__(self, research_handler=None, evaluator=None, **kwargs):
+    def __init__(
+        self, research_handler=None, evaluator=None,
+        intent_classifier=None, **kwargs
+    ):
         super().__init__(**kwargs)
         self.research_handler = research_handler
         self.evaluator = evaluator
+        self.intent_classifier = intent_classifier
 
     async def _handle_chat(self, msg, session):
-        """Override: ! commands + self-evaluation + research feedback."""
+        """Override: ! commands + intent classification + self-evaluation."""
         content = msg.get("content", "").strip()
 
+        # ! commands go to research handler directly
         if self.research_handler and self.research_handler.is_command(content):
             logger.info(f"Command: {content[:60]}")
             resp = await self.research_handler.handle(content)
@@ -59,6 +65,22 @@ class GenealogyChat(ChatServer):
                 resp.get("role", "system"),
             )
             return resp
+
+        # Intent classification for natural language
+        if self.intent_classifier:
+            pipeline = await self.intent_classifier.classify(content)
+            if pipeline.primary and pipeline.primary.confidence > 0.5:
+                intent = pipeline.primary
+                logger.info(
+                    f"Intent: {intent.skill} "
+                    f"(confidence={intent.confidence:.0%}, "
+                    f"compound={pipeline.is_compound}, "
+                    f"extracted={intent.extracted})"
+                )
+                # Add intent info to the message metadata
+                msg["_intent"] = intent.skill
+                msg["_extracted"] = intent.extracted
+                msg["_pipeline"] = pipeline
 
         # Normal chat routing
         resp = await super()._handle_chat(msg, session)
@@ -211,6 +233,16 @@ def build_server(config: Dict[str, Any]):
     # Self-evaluation
     evaluator = ResponseEvaluator(tree)
 
+    # Intent classifier (uses fast model for natural language understanding)
+    from khonliang.client import OllamaClient
+
+    classifier_client = OllamaClient(
+        model="llama3.2:3b", base_url=config["ollama"]["url"]
+    )
+    intent_classifier = IntentClassifier(
+        ollama_client=classifier_client, model="llama3.2:3b"
+    )
+
     server = GenealogyChat(
         roles=roles,
         router=router,
@@ -218,6 +250,7 @@ def build_server(config: Dict[str, Any]):
         on_message=on_message,
         research_handler=research_handler,
         evaluator=evaluator,
+        intent_classifier=intent_classifier,
     )
 
     return server, research_pool, trigger
