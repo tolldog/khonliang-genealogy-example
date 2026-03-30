@@ -6,9 +6,13 @@ responses against the family tree data.
 """
 
 import re
-from typing import Any, Dict, List, Optional
-
-from khonliang.roles.evaluator import BaseEvaluator, EvalIssue, EvalRule, SpeculationRule, UncertaintyRule
+from khonliang.roles.evaluator import (
+    BaseEvaluator,
+    EvalIssue,
+    EvalRule,
+    SpeculationRule,
+    UncertaintyRule,
+)
 
 from genealogy_agent.gedcom_parser import GedcomTree
 

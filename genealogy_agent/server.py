@@ -64,6 +64,18 @@ class GenealogyChat(ChatServer):
             self._session_contexts[sid] = SessionContext(session_id=sid)
         return self._session_contexts[sid]
 
+    async def _handle_client(self, websocket):
+        """Override to clean up session context on disconnect."""
+        try:
+            await super()._handle_client(websocket)
+        finally:
+            # Parent removed the session from _sessions already.
+            # Find which session_id was added during super() and clean up.
+            for sid in list(self._session_contexts):
+                if sid not in self._sessions:
+                    self._session_contexts.pop(sid, None)
+                    logger.debug(f"Cleaned up session context: {sid}")
+
     async def _handle_chat(self, msg, session):
         """Override: ! commands + session context + intent + self-evaluation."""
         content = msg.get("content", "").strip()
@@ -95,10 +107,10 @@ class GenealogyChat(ChatServer):
                 msg["_extracted"] = intent.extracted
                 msg["_pipeline"] = pipeline
 
-        # Inject session context for multi-turn coherence
+        # Inject session context for multi-turn coherence (async-safe)
         session_ctx = self._get_session_context(session)
-        import genealogy_agent.roles as _roles_mod
-        _roles_mod._active_session_context = session_ctx.build_context(max_turns=5)
+        from genealogy_agent.roles import _session_context_var
+        _session_context_var.set(session_ctx.build_context(max_turns=5))
 
         # Normal chat routing
         resp = await super()._handle_chat(msg, session)
