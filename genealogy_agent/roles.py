@@ -9,6 +9,10 @@ Genealogy agent roles — LLM-backed family history research.
 import re
 from typing import Any, Dict, List, Optional
 
+# Session context injected by the chat server before each handle() call.
+# Roles read this in build_context() for multi-turn coherence.
+_active_session_context: str = ""
+
 from khonliang.roles.base import BaseRole
 
 from genealogy_agent.gedcom_parser import GedcomTree, Person
@@ -97,7 +101,13 @@ def _build_multi_context(
         return tree.build_context(all_matches[0].xref, depth=2)
 
     # Fallback: tree summary
-    return tree.get_summary()
+    result = tree.get_summary()
+
+    # Append session context if available (multi-turn coherence)
+    if _active_session_context:
+        result = f"{result}\n\n[SESSION CONTEXT]\n{_active_session_context}"
+
+    return result
 
 
 class ResearcherRole(BaseRole):
