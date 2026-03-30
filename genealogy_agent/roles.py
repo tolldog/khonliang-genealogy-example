@@ -6,6 +6,7 @@ Genealogy agent roles — LLM-backed family history research.
 - NarratorRole: generates family stories from genealogy data
 """
 
+import re
 from typing import Any, Dict, List, Optional
 
 from khonliang.roles.base import BaseRole
@@ -43,8 +44,6 @@ def _build_multi_context(
 
     # Extract candidate search terms
     # Strip punctuation, possessives, and normalize quotes
-    import re
-
     words = message.split()
     candidates = []
     for w in words:
@@ -278,27 +277,68 @@ class NarratorRole(BaseRole):
         }
 
     def _extract_referenced_persons(self, message: str) -> List[Dict]:
-        """Extract persons referenced in the query for evaluator context."""
-        import re
+        """Extract persons referenced in the query for evaluator context.
 
-        persons = []
-        # Extract name-like words and search for each
-        words = message.split()
-        seen = set()
-        for i in range(len(words)):
-            for j in range(i + 1, min(i + 4, len(words) + 1)):
-                name_guess = " ".join(words[i:j])
-                person = self.tree.find_person(name_guess)
-                if person and person.xref not in seen:
-                    seen.add(person.xref)
-                    year = None
-                    match = re.search(r"\d{4}", person.birth_date or "")
-                    if match:
-                        year = int(match.group())
-                    persons.append({
-                        "name": person.full_name,
-                        "birth_year": year,
-                        "birth_place": person.birth_place,
-                        "xref": person.xref,
-                    })
+        Uses per-token and bigram searches (via search_persons) so that
+        natural-language queries like "Tell me about John Smith" match
+        correctly, rather than passing the whole sentence as a query.
+        """
+        persons: List[Dict] = []
+
+        # Heuristic: extract name-like tokens and search per token / n-gram.
+        tokens = re.findall(r"[A-Za-z][A-Za-z'-]*", message)
+
+        # Skip common non-name words (mirrors _build_multi_context skip set)
+        skip = {
+            "the", "a", "an", "all", "of", "in", "about", "tell", "me",
+            "who", "were", "was", "are", "is", "what", "when", "where",
+            "how", "did", "do", "does", "my", "our", "their", "his", "her",
+            "family", "tree", "parents", "children", "ancestors", "descendants",
+            "grandparents", "siblings", "married", "born", "died", "lived",
+            "from", "to", "and", "with", "for", "this", "that", "these",
+            "those", "have", "had", "been", "any", "some", "every", "each",
+            "story", "history", "migration", "check", "verify", "validate",
+            "narrative", "describe", "explain", "find", "search", "list",
+            "show", "give", "get", "can", "you", "please", "could",
+        }
+
+        name_tokens = [t for t in tokens if t.lower() not in skip]
+
+        # Build candidate queries: unigrams and bigrams
+        queries: List[str] = []
+        for t in name_tokens:
+            if len(t) >= 2:
+                queries.append(t)
+        for i in range(len(name_tokens) - 1):
+            queries.append(f"{name_tokens[i]} {name_tokens[i + 1]}")
+
+        # Search per query and accumulate unique persons (by xref)
+        seen_queries: set = set()
+        persons_by_xref: Dict[Any, Person] = {}
+        for q in queries:
+            q_key = q.lower()
+            if q_key in seen_queries:
+                continue
+            seen_queries.add(q_key)
+
+            for p in self.tree.search_persons(q):
+                if p.xref not in persons_by_xref:
+                    persons_by_xref[p.xref] = p
+                if len(persons_by_xref) >= 10:
+                    break
+            if len(persons_by_xref) >= 10:
+                break
+
+        for p in persons_by_xref.values():
+            year = None
+            if p.birth_date:
+                match = re.search(r"\d{4}", p.birth_date)
+                if match:
+                    year = int(match.group())
+            persons.append({
+                "name": p.full_name,
+                "birth_year": year,
+                "birth_place": p.birth_place,
+                "xref": p.xref,
+            })
         return persons

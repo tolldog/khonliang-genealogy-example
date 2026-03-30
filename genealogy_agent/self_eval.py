@@ -61,11 +61,20 @@ class ResponseEvaluator:
         if role in ("research", "system", "analyst", "librarian"):
             return {"passed": True, "confidence": 0.95, "issues": [], "caveat": None}
 
+        meta = metadata or {}
+        referenced_persons = meta.get("referenced_persons", [])
+
+        # Build a name → facts lookup from metadata ground truth
+        persons_lookup: Dict[str, Dict[str, Any]] = {
+            p["name"].lower(): p
+            for p in referenced_persons
+            if p.get("name")
+        }
 
         issues = []
 
         # Check for date claims that contradict tree
-        date_issues = self._check_dates(response)
+        date_issues = self._check_dates(response, persons_lookup)
         issues.extend(date_issues)
 
         # Check for relationship claims
@@ -105,9 +114,23 @@ class ResponseEvaluator:
             "caveat": caveat,
         }
 
-    def _check_dates(self, response: str) -> List[Dict]:
-        """Check if date claims in response contradict tree data."""
+    def _check_dates(
+        self,
+        response: str,
+        persons_lookup: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict]:
+        """Check if date claims in response contradict tree data.
+
+        Args:
+            response: LLM response text to check.
+            persons_lookup: Optional name→facts dict built from role metadata
+                            (ground truth from tree).  When a name is found
+                            here the metadata birth_year is used directly;
+                            a tree search is still performed for death year.
+        """
         issues = []
+        if persons_lookup is None:
+            persons_lookup = {}
 
         # Find "Name born/died YEAR" patterns with multi-word names
         date_claims = re.findall(
@@ -118,12 +141,21 @@ class ResponseEvaluator:
 
         for name, year_str in date_claims:
             year = int(year_str)
-            person = self.tree.find_person(name)
-            if person is None:
-                continue
 
-            tree_birth = self._extract_year(person.birth_date)
-            tree_death = self._extract_year(person.death_date)
+            # Prefer metadata ground truth; fall back to tree search
+            if name.lower() in persons_lookup:
+                p_meta = persons_lookup[name.lower()]
+                tree_birth: Optional[int] = p_meta.get("birth_year")
+                person = self.tree.find_person(name)
+                tree_death: Optional[int] = (
+                    self._extract_year(person.death_date) if person else None
+                )
+            else:
+                person = self.tree.find_person(name)
+                if person is None:
+                    continue
+                tree_birth = self._extract_year(person.birth_date)
+                tree_death = self._extract_year(person.death_date)
 
             # Check context around the name to determine if birth or death
             name_pos = response.find(name)
