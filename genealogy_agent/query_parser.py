@@ -130,7 +130,7 @@ def _genealogy_regex_fallback(message: str) -> Dict[str, Any]:
 
     # Place
     place_match = re.search(
-        r"(?:born in|lived in|from|in)\s+([a-z][a-z\s]+?)(?:\s+(?:born|before|after|between|no\s|surname|last)|$)",
+        r"(?:born in|died in|lived in|from|in)\s+([a-z][a-z\s]+?)(?:\s+(?:before|after|between|no\s|surname|last|born|died)|$)",
         msg_lower,
     )
     if place_match:
@@ -183,7 +183,19 @@ def _genealogy_regex_fallback(message: str) -> Dict[str, Any]:
         params["action"] = "research"
     elif "gap" in msg_lower or "dead end" in msg_lower or "missing" in msg_lower:
         params["action"] = "gaps"
-    elif params.get("sex") or params.get("place") or params.get("year_before") or params.get("year_after") or params.get("year_between"):
+    elif any(
+        key in params
+        for key in (
+            "sex",
+            "place",
+            "year_before",
+            "year_after",
+            "year_between",
+            "surname",
+            "has_parents",
+            "has_death_date",
+        )
+    ):
         params["action"] = "query"
     elif params.get("name"):
         params["action"] = "lookup"
