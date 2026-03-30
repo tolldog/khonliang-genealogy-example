@@ -38,9 +38,42 @@ class WebSearchResearcher(BaseResearcher):
     ]
     max_concurrent = 3  # multiple web searches can run in parallel
 
-    def __init__(self, tree: Optional[GedcomTree] = None, max_results: int = 5):
+    def __init__(
+        self,
+        tree: Optional[GedcomTree] = None,
+        max_results: int = 5,
+        wikitree_app_id: str = "khonliang-genealogy",
+        geni_app_id: str = "",
+        geni_api_key: str = "",
+        geni_api_secret: str = "",
+    ):
         self.searcher = GenealogySearcher(max_results=max_results)
         self.tree = tree
+
+        # API engines (lazy-initialized)
+        self._wikitree = None
+        self._geni = None
+        self._wikitree_app_id = wikitree_app_id
+        self._geni_app_id = geni_app_id
+        self._geni_api_key = geni_api_key
+        self._geni_api_secret = geni_api_secret
+
+    def _get_wikitree(self):
+        if self._wikitree is None:
+            from genealogy_agent.engines.wikitree import WikiTreeClient
+            self._wikitree = WikiTreeClient(app_id=self._wikitree_app_id)
+        return self._wikitree
+
+    def _get_geni(self):
+        if self._geni is None:
+            from genealogy_agent.engines.geni import GeniClient
+            self._geni = GeniClient(
+                app_id=self._geni_app_id,
+                api_key=self._geni_api_key,
+                api_secret=self._geni_api_secret,
+            )
+            self._geni.authenticate()
+        return self._geni
 
     async def research(self, task: ResearchTask) -> ResearchResult:
         if task.task_type == "person_lookup":
@@ -120,6 +153,8 @@ class WebSearchResearcher(BaseResearcher):
                 name, place=place, max_results=5
             ),
             lambda: self.searcher.multi_search(multi_query, max_per_engine=5),
+            lambda: self._search_wikitree(name),
+            lambda: self._search_geni(name),
         ]
 
         # Add raw query strategy if there's extra context
@@ -174,6 +209,65 @@ class WebSearchResearcher(BaseResearcher):
             sources=sources,
             scope=task.scope,
         )
+
+    def _search_wikitree(self, name: str):
+        """Search WikiTree API, return SearchResult-compatible objects."""
+        from genealogy_agent.web_search import SearchResult
+
+        results = []
+        try:
+            client = self._get_wikitree()
+            parts = name.split()
+            first = parts[0] if parts else ""
+            last = parts[-1] if len(parts) >= 2 else parts[0] if parts else ""
+
+            search_results = client.search_person(
+                first_name=first, last_name=last
+            )
+            if search_results:
+                for person in search_results[:5]:
+                    if not isinstance(person, dict):
+                        continue
+                    wiki_id = person.get("Name", "")
+                    url = (
+                        f"https://www.wikitree.com/wiki/{wiki_id}"
+                        if wiki_id else ""
+                    )
+                    results.append(SearchResult(
+                        title=f"WikiTree: {client.format_person(person)}",
+                        url=url,
+                        snippet=client.format_person(person),
+                        source="www.wikitree.com",
+                    ))
+        except Exception as e:
+            logger.debug(f"WikiTree search failed: {e}")
+        return results
+
+    def _search_geni(self, name: str):
+        """Search Geni API, return SearchResult-compatible objects."""
+        from genealogy_agent.web_search import SearchResult
+
+        results = []
+        try:
+            client = self._get_geni()
+            if not client.access_token:
+                return results
+
+            search_results = client.search(names=name)
+            if search_results:
+                for profile in search_results[:5]:
+                    if not isinstance(profile, dict):
+                        continue
+                    profile_url = profile.get("profile_url", "")
+                    results.append(SearchResult(
+                        title=f"Geni: {client.format_profile(profile)}",
+                        url=profile_url,
+                        snippet=client.format_profile(profile),
+                        source="www.geni.com",
+                    ))
+        except Exception as e:
+            logger.debug(f"Geni search failed: {e}")
+        return results
 
     def _historical_context(self, task: ResearchTask) -> ResearchResult:
         """Look up historical context for a place and time."""

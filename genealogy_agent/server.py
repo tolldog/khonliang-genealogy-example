@@ -182,8 +182,15 @@ def build_server(config: Dict[str, Any]):
     )
 
     # Research pool
+    import os
+
     research_pool = ResearchPool()
-    research_pool.register(WebSearchResearcher(tree=tree))
+    research_pool.register(WebSearchResearcher(
+        tree=tree,
+        geni_api_key=os.environ.get("GENI_API_KEY", ""),
+        geni_api_secret=os.environ.get("GENI_API_SECRET", ""),
+        geni_app_id=os.environ.get("GENI_APP_ID", ""),
+    ))
     research_pool.register(TreeResearcher(tree=tree))
     research_pool.set_librarian(librarian)
 
