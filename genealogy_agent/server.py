@@ -24,7 +24,12 @@ from genealogy_agent.gedcom_parser import GedcomTree
 from genealogy_agent.intent import IntentClassifier
 from genealogy_agent.self_eval import create_genealogy_evaluator
 from genealogy_agent.researchers import TreeResearcher, WebSearchResearcher
-from genealogy_agent.roles import FactCheckerRole, NarratorRole, ResearcherRole
+from genealogy_agent.roles import (
+    FactCheckerRole,
+    NarratorRole,
+    ResearcherRole,
+    _session_context_var,
+)
 from genealogy_agent.router import GenealogyRouter
 
 logging.basicConfig(
@@ -107,13 +112,15 @@ class GenealogyChat(ChatServer):
                 msg["_extracted"] = intent.extracted
                 msg["_pipeline"] = pipeline
 
-        # Inject session context for multi-turn coherence (async-safe)
+        # Inject session context for multi-turn coherence (async-safe).
+        # Use ContextVar.set/reset so the value is scoped to this request only.
         session_ctx = self._get_session_context(session)
-        from genealogy_agent.roles import _session_context_var
-        _session_context_var.set(session_ctx.build_context(max_turns=5))
-
-        # Normal chat routing
-        resp = await super()._handle_chat(msg, session)
+        token = _session_context_var.set(session_ctx.build_context(max_turns=5))
+        try:
+            # Normal chat routing
+            resp = await super()._handle_chat(msg, session)
+        finally:
+            _session_context_var.reset(token)
 
         # Update session context with this exchange
         if resp.get("type") == "response":
