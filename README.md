@@ -68,6 +68,8 @@ python -m genealogy_agent.chat_client
 | `!ingest-file path` | Ingest a file |
 | `!knowledge` | Show knowledge store status |
 | `!axiom` | List/set axioms (Tier 1) |
+| `!promote entry_id` | Promote knowledge entry from Tier 3 to Tier 2 |
+| `!demote entry_id` | Demote knowledge entry from Tier 2 to Tier 3 |
 | `!prune` | Clean up low-quality knowledge |
 | `/search query` | Search knowledge base |
 | `/rate 1-5` | Rate last response |
@@ -91,18 +93,22 @@ Edit `config.yaml`:
 
 ```yaml
 server:
+  host: "localhost"
   ws_port: 8765
   web_port: 8766
 
 app:
   title: "Genealogy Agent"
   gedcom: "data/family.ged"
+  knowledge_db: "data/knowledge.db"
+  default_scope: "genealogy"
 
 ollama:
+  url: "http://localhost:11434"
   models:
-    researcher: "llama3.2:3b"
-    fact_checker: "qwen2.5:7b"
-    narrator: "llama3.1:8b"
+    researcher: "llama3.2:3b"      # Fast model for Q&A
+    fact_checker: "qwen2.5:7b"     # Medium model for validation
+    narrator: "llama3.1:8b"        # Larger model for narratives
 
 theme:
   primary: "#e94560"
@@ -111,19 +117,29 @@ theme:
 
 Environment variable overrides: `OLLAMA_URL`, `GEDCOM_FILE`, `WS_PORT`, `WEB_PORT`, `APP_TITLE`.
 
+API credentials (set in environment or `.env`): `GENI_API_KEY`, `GENI_API_SECRET`, `GENI_APP_ID`.
+
 ## Architecture
 
 ```text
 User (browser/CLI/tool)
   → WebSocket Chat Server
-    → Intent Classifier (LLM-based skill detection)
+    → Intent Classifier (LLM-based skill detection, compound intents)
     → ResearchTrigger (! commands)
     → Router (keyword matching)
+    → Session Context (multi-turn coherence via contextvars)
     → Specialist Role (LLM inference)
-    → Self-Evaluator (checks against tree data)
+    → Self-Evaluator (checks dates/relationships against tree data)
+      → Auto-queues background research on uncertainty or date mismatch
     → Librarian (auto-indexes responses to Tier 3)
     → Research Pool (DDG + Google + Bing + WikiTree + Geni)
 ```
+
+**Session context** is maintained per WebSocket connection using `contextvars` for async safety. Each role receives the last 5 exchanges as context, enabling follow-up questions like "tell me more about her parents" without re-specifying names.
+
+**Self-evaluation** runs after every LLM response, checking date claims and relationship claims against the GEDCOM tree. If issues are found, a caveat is appended. If the LLM expressed uncertainty, background research is automatically queued.
+
+**Intent classification** uses a fast LLM (llama3.2:3b) to detect skills from natural language. Supports compound intents like "find John Smith and then write a narrative" which chains lookup + narrator.
 
 ## License
 

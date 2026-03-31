@@ -22,9 +22,14 @@ from genealogy_agent.chat_handler import ResearchChatHandler
 from genealogy_agent.config import load_config
 from genealogy_agent.gedcom_parser import GedcomTree
 from genealogy_agent.intent import IntentClassifier
-from genealogy_agent.self_eval import ResponseEvaluator
+from genealogy_agent.self_eval import create_genealogy_evaluator
 from genealogy_agent.researchers import TreeResearcher, WebSearchResearcher
-from genealogy_agent.roles import FactCheckerRole, NarratorRole, ResearcherRole
+from genealogy_agent.roles import (
+    FactCheckerRole,
+    NarratorRole,
+    ResearcherRole,
+    _session_context_var,
+)
 from genealogy_agent.router import GenealogyRouter
 
 logging.basicConfig(
@@ -36,11 +41,12 @@ logger = logging.getLogger(__name__)
 
 class GenealogyChat(ChatServer):
     """
-    Extended chat server with research commands and self-evaluation.
+    Extended chat server with session context, research, and self-evaluation.
 
+    - Session context passed to roles for multi-turn coherence
     - ! commands intercepted by ResearchChatHandler
-    - LLM responses evaluated against tree data before returning
-    - Evaluation issues trigger automatic research to fill gaps
+    - Intent classification via LLM
+    - Self-evaluation against tree data
     """
 
     def __init__(
@@ -51,9 +57,32 @@ class GenealogyChat(ChatServer):
         self.research_handler = research_handler
         self.evaluator = evaluator
         self.intent_classifier = intent_classifier
+        # Per-session contexts (session_id -> SessionContext)
+        self._session_contexts: Dict[str, Any] = {}
+
+    def _get_session_context(self, session):
+        """Get or create a SessionContext for this chat session."""
+        from khonliang.roles.session import SessionContext
+
+        sid = session.session_id
+        if sid not in self._session_contexts:
+            self._session_contexts[sid] = SessionContext(session_id=sid)
+        return self._session_contexts[sid]
+
+    async def _handle_client(self, websocket):
+        """Override to clean up session context on disconnect."""
+        try:
+            await super()._handle_client(websocket)
+        finally:
+            # Parent removed the session from _sessions already.
+            # Find which session_id was added during super() and clean up.
+            for sid in list(self._session_contexts):
+                if sid not in self._sessions:
+                    self._session_contexts.pop(sid, None)
+                    logger.debug(f"Cleaned up session context: {sid}")
 
     async def _handle_chat(self, msg, session):
-        """Override: ! commands + intent classification + self-evaluation."""
+        """Override: ! commands + session context + intent + self-evaluation."""
         content = msg.get("content", "").strip()
 
         # ! commands go to research handler directly
@@ -83,8 +112,23 @@ class GenealogyChat(ChatServer):
                 msg["_extracted"] = intent.extracted
                 msg["_pipeline"] = pipeline
 
-        # Normal chat routing
-        resp = await super()._handle_chat(msg, session)
+        # Inject session context for multi-turn coherence (async-safe).
+        # Use ContextVar.set/reset so the value is scoped to this request only.
+        session_ctx = self._get_session_context(session)
+        token = _session_context_var.set(session_ctx.build_context(max_turns=5))
+        try:
+            # Normal chat routing
+            resp = await super()._handle_chat(msg, session)
+        finally:
+            _session_context_var.reset(token)
+
+        # Update session context with this exchange
+        if resp.get("type") == "response":
+            session_ctx.add_exchange(
+                content,
+                resp.get("content", "")[:500],
+                resp.get("role", ""),
+            )
 
         # Self-evaluate LLM responses
         if self.evaluator and resp.get("type") == "response":
@@ -100,18 +144,18 @@ class GenealogyChat(ChatServer):
             )
 
             # Append caveat if issues found
-            if evaluation["caveat"]:
-                resp["content"] = response_text + "\n\n" + evaluation["caveat"]
+            if evaluation.caveat:
+                resp["content"] = response_text + "\n\n" + evaluation.caveat
 
             # Adjust knowledge confidence based on evaluation
             resp.setdefault("metadata", {})
-            resp["metadata"]["eval_confidence"] = evaluation["confidence"]
-            resp["metadata"]["eval_issues"] = len(evaluation["issues"])
+            resp["metadata"]["eval_confidence"] = evaluation.confidence
+            resp["metadata"]["eval_issues"] = len(evaluation.issues)
 
-            if not evaluation["passed"]:
+            if not evaluation.passed:
                 logger.warning(
-                    f"Self-eval flagged: {len(evaluation['issues'])} issues, "
-                    f"confidence={evaluation['confidence']:.0%}"
+                    f"Self-eval flagged: {len(evaluation.issues)} issues, "
+                    f"confidence={evaluation.confidence:.0%}"
                 )
 
             # Feed evaluation back to research — if the agent was uncertain
@@ -127,8 +171,8 @@ class GenealogyChat(ChatServer):
         self, evaluation, query
     ):
         """Queue research tasks based on evaluation findings."""
-        for issue in evaluation["issues"]:
-            if issue["type"] == "uncertainty":
+        for issue in evaluation.issues:
+            if issue.issue_type == "uncertainty":
                 # Agent said "I don't have info" — research the query
                 try:
                     from khonliang.research.models import ResearchTask
@@ -143,22 +187,20 @@ class GenealogyChat(ChatServer):
                 except Exception:
                     logger.debug("Failed to queue uncertainty research", exc_info=True)
 
-            elif issue["type"] == "unknown_name":
-                # Name mentioned but not in tree — look it up
-                name = issue.get("name", "")
-                if name:
-                    try:
-                        from khonliang.research.models import ResearchTask
-                        self.research_handler.pool.submit(ResearchTask(
-                            task_type="person_lookup",
-                            query=f'"{name}" genealogy',
-                            scope="genealogy",
-                            source="self_eval_unknown_name",
-                            priority=-2,
-                        ))
-                        logger.info(f"Auto-research queued for unknown name: {name}")
-                    except Exception:
-                        logger.debug("Failed to queue unknown-name research", exc_info=True)
+            elif issue.issue_type == "date_mismatch":
+                # Date mismatch — research the person to verify
+                try:
+                    from khonliang.research.models import ResearchTask
+                    self.research_handler.pool.submit(ResearchTask(
+                        task_type="person_lookup",
+                        query=f"{query} genealogy verify",
+                        scope="genealogy",
+                        source="self_eval_date_mismatch",
+                        priority=-2,
+                    ))
+                    logger.info(f"Auto-research queued for date mismatch: {query[:40]}")
+                except Exception:
+                    logger.debug("Failed to queue date-mismatch research", exc_info=True)
 
 
 def build_server(config: Dict[str, Any]):
@@ -209,10 +251,15 @@ def build_server(config: Dict[str, Any]):
     trigger.add_prefix("!migration", "tree_migration")
     trigger.add_prefix("!tree", "tree_lookup")
 
-    # Models
+    # Models — keep researcher hot, unload narrator/fact_checker after use
     pool = ModelPool(
         config["ollama"]["models"],
         base_url=config["ollama"]["url"],
+        keep_alive={
+            "researcher": "30m",     # fast model, stays loaded
+            "fact_checker": "5m",    # medium, moderate keep
+            "narrator": "5m",       # used less frequently
+        },
     )
 
     roles = {
@@ -242,8 +289,8 @@ def build_server(config: Dict[str, Any]):
         research_pool, trigger, librarian=librarian, tree=tree
     )
 
-    # Self-evaluation
-    evaluator = ResponseEvaluator(tree)
+    # Self-evaluation using khonliang BaseEvaluator + genealogy rules
+    evaluator = create_genealogy_evaluator(tree)
 
     # Intent classifier (uses fast model for natural language understanding)
     from khonliang.client import OllamaClient

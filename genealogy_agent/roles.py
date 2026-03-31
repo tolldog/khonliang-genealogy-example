@@ -6,12 +6,30 @@ Genealogy agent roles — LLM-backed family history research.
 - NarratorRole: generates family stories from genealogy data
 """
 
+import contextvars
 import re
 from typing import Any, Dict, List, Optional
 
 from khonliang.roles.base import BaseRole
 
 from genealogy_agent.gedcom_parser import GedcomTree, Person
+
+# Per-request session context using contextvars (async-safe).
+# Set by the chat server before each handle() call.
+_session_context_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_session_context_var", default=""
+)
+
+
+def _build_context_with_session(
+    tree: GedcomTree, message: str, max_persons: int = 10
+) -> str:
+    """Build tree context + session context for multi-turn coherence."""
+    result = _build_multi_context(tree, message, max_persons)
+    session_ctx = _session_context_var.get("")
+    if session_ctx:
+        result = f"{result}\n\n[SESSION CONTEXT]\n{session_ctx}"
+    return result
 
 
 def _build_multi_context(
@@ -25,8 +43,6 @@ def _build_multi_context(
     2. Find a specific person mentioned by name
     3. Fall back to tree summary
     """
-    msg_lower = message.lower()
-
     # Strategy 1: broad search — look for name-like words in the query
     # Skip common non-name words
     skip = {
@@ -123,7 +139,7 @@ class ResearcherRole(BaseRole):
     def build_context(
         self, message: str, context: Optional[Dict[str, Any]] = None
     ) -> str:
-        return _build_multi_context(self.tree, message)
+        return _build_context_with_session(self.tree, message)
 
     async def handle(
         self,
@@ -174,7 +190,7 @@ class FactCheckerRole(BaseRole):
     def build_context(
         self, message: str, context: Optional[Dict[str, Any]] = None
     ) -> str:
-        return _build_multi_context(self.tree, message, max_persons=15)
+        return _build_context_with_session(self.tree, message, max_persons=15)
 
     async def handle(
         self,
@@ -234,7 +250,7 @@ class NarratorRole(BaseRole):
         self, message: str, context: Optional[Dict[str, Any]] = None
     ) -> str:
         # Tree data
-        tree_ctx = _build_multi_context(self.tree, message)
+        tree_ctx = _build_context_with_session(self.tree, message)
 
         # Knowledge store data (previously researched facts)
         knowledge_ctx = ""
