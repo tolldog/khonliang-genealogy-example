@@ -17,6 +17,25 @@ ollama:
     fact_checker: "qwen2.5:7b"
     narrator: "llama3.1:8b"
 
+personalities:
+  enabled: true
+
+consensus:
+  enabled: true
+  timeout: 30
+  debate_enabled: true
+  debate_rounds: 2
+  disagreement_threshold: 0.6
+
+training:
+  feedback_enabled: true
+  heuristics_enabled: true
+
+reports:
+  enabled: true
+  port: 5050
+  db: "data/reports.db"
+
 theme:
   primary: "#e94560"
   background: "#1a1a2e"

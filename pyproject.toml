@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "LLM-backed genealogy research tool powered by khonliang"
 requires-python = ">=3.10"
 dependencies = [
-    "ollama-khonliang @ file:///mnt/dev/ttoll/dispatch",
+    "ollama-khonliang[reporting] @ file:///mnt/dev/ttoll/ollama-khonliang",
     "websockets>=12.0",
     "ddgs>=9.0",
     "beautifulsoup4>=4.12",

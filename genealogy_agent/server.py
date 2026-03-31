@@ -13,18 +13,24 @@ import logging
 import os
 from typing import Any, Dict
 
+import re
+
 from khonliang import ModelPool
 from khonliang.client import OllamaClient
 from khonliang.integrations.websocket_chat import ChatServer
 from khonliang.knowledge import KnowledgeStore, Librarian
+from khonliang.personalities import extract_mention, build_prompt, format_response
 from khonliang.research import ResearchPool, ResearchTrigger
-
 from khonliang.routing import ComplexityStrategy, ModelRouter
+from khonliang.training import FeedbackStore, HeuristicPool
 
 from genealogy_agent.chat_handler import ResearchChatHandler
 from genealogy_agent.config import load_config
+from genealogy_agent.consensus import create_consensus_team, create_debate_orchestrator
+from genealogy_agent.report_server import get_detector, publish_report, start_report_server
 from genealogy_agent.gedcom_parser import GedcomTree
 from genealogy_agent.intent import IntentClassifier
+from genealogy_agent.personalities import create_genealogy_registry
 from genealogy_agent.self_eval import create_genealogy_evaluator
 from genealogy_agent.researchers import TreeResearcher, WebSearchResearcher
 from genealogy_agent.roles import (
@@ -54,12 +60,20 @@ class GenealogyChat(ChatServer):
 
     def __init__(
         self, research_handler=None, evaluator=None,
-        intent_classifier=None, **kwargs
+        intent_classifier=None, feedback_store=None,
+        heuristic_pool=None, personality_registry=None,
+        consensus_team=None, debate_orchestrator=None,
+        **kwargs
     ):
         super().__init__(**kwargs)
         self.research_handler = research_handler
         self.evaluator = evaluator
         self.intent_classifier = intent_classifier
+        self.feedback_store = feedback_store
+        self.heuristic_pool = heuristic_pool
+        self.personality_registry = personality_registry
+        self.consensus_team = consensus_team
+        self.debate_orchestrator = debate_orchestrator
         # Per-session contexts (session_id -> SessionContext)
         self._session_contexts: Dict[str, Any] = {}
 
@@ -85,8 +99,18 @@ class GenealogyChat(ChatServer):
                     logger.debug(f"Cleaned up session context: {sid}")
 
     async def _handle_chat(self, msg, session):
-        """Override: ! commands + session context + intent + self-evaluation."""
+        """Override: /rate + @mention + ! commands + session context + intent + self-evaluation + consensus."""
         content = msg.get("content", "").strip()
+
+        # /rate command — rate the last interaction
+        if content.startswith("/rate"):
+            return self._handle_rate(content, session)
+
+        # @mention — personality routing
+        if content.startswith("@") and self.personality_registry:
+            personality_resp = await self._handle_personality(content, msg, session)
+            if personality_resp:
+                return personality_resp
 
         # ! commands go to research handler directly
         if self.research_handler and self.research_handler.is_command(content):
@@ -125,20 +149,30 @@ class GenealogyChat(ChatServer):
         finally:
             _session_context_var.reset(token)
 
+        # Post-process: session context, eval, consensus, feedback logging
+        return await self._post_process_response(resp, content, msg, session)
+
+    async def _post_process_response(self, resp, content, msg, session):
+        """Shared post-processing: session context, eval, consensus, heuristics, feedback."""
+        if resp.get("type") != "response":
+            return resp
+
+        session_ctx = self._get_session_context(session)
+
         # Update session context with this exchange
-        if resp.get("type") == "response":
-            session_ctx.add_exchange(
-                content,
-                resp.get("content", "")[:500],
-                resp.get("role", ""),
-            )
+        session_ctx.add_exchange(
+            content,
+            resp.get("content", "")[:500],
+            resp.get("role", ""),
+        )
 
         # Self-evaluate LLM responses
-        if self.evaluator and resp.get("type") == "response":
+        evaluation = None
+        if self.evaluator:
             response_text = resp.get("content", "")
             role = resp.get("role", "")
-
             resp_metadata = resp.get("metadata", {})
+
             evaluation = self.evaluator.evaluate(
                 response_text,
                 query=content,
@@ -146,11 +180,18 @@ class GenealogyChat(ChatServer):
                 metadata=resp_metadata,
             )
 
-            # Append caveat if issues found
-            if evaluation.caveat:
+            # Consensus voting on high-severity issues
+            high_issues = [
+                i for i in evaluation.issues if getattr(i, "severity", "") == "high"
+            ]
+            if high_issues and self.consensus_team:
+                resp = await self._run_consensus(
+                    resp, content, evaluation, high_issues
+                )
+            elif evaluation.caveat:
+                # Simple caveat when no consensus needed
                 resp["content"] = response_text + "\n\n" + evaluation.caveat
 
-            # Adjust knowledge confidence based on evaluation
             resp.setdefault("metadata", {})
             resp["metadata"]["eval_confidence"] = evaluation.confidence
             resp["metadata"]["eval_issues"] = len(evaluation.issues)
@@ -161,12 +202,209 @@ class GenealogyChat(ChatServer):
                     f"confidence={evaluation.confidence:.0%}"
                 )
 
-            # Feed evaluation back to research — if the agent was uncertain
-            # or couldn't find info, queue background research
+            # Record outcome for heuristic learning
+            if self.heuristic_pool:
+                try:
+                    self.heuristic_pool.record_outcome(
+                        action=f"respond_as_{role}",
+                        result="success" if evaluation.passed else "failure",
+                        context={
+                            "query_type": msg.get("_intent", "unknown"),
+                            "role": role,
+                        },
+                        details={
+                            "confidence": evaluation.confidence,
+                            "issues": len(evaluation.issues),
+                        },
+                    )
+                except Exception:
+                    logger.debug("Failed to record heuristic outcome", exc_info=True)
+
+            # Queue background research on uncertainty/date mismatches
             if self.research_handler:
-                self._queue_research_from_eval(
-                    evaluation, content
+                self._queue_research_from_eval(evaluation, content)
+
+        # Log interaction to feedback store
+        if self.feedback_store:
+            try:
+                iid = self.feedback_store.log_interaction(
+                    message=content,
+                    role=resp.get("role", ""),
+                    route_reason=resp.get("reason", ""),
+                    response=resp.get("content", ""),
+                    generation_ms=resp.get("metadata", {}).get("generation_time_ms"),
+                    session_id=session.session_id,
+                    metadata=resp.get("metadata"),
                 )
+                session._last_interaction_id = iid
+            except Exception:
+                logger.debug("Failed to log interaction", exc_info=True)
+
+        return resp
+
+    def _handle_rate(self, content, session):
+        """Handle /rate 1-5 [optional feedback text]."""
+        parts = content.split(None, 2)
+        if len(parts) < 2:
+            return {
+                "type": "response",
+                "content": "Usage: /rate 1-5 [optional feedback]",
+                "role": "system",
+            }
+        try:
+            rating = int(parts[1])
+        except ValueError:
+            return {
+                "type": "response",
+                "content": "Rating must be a number 1-5.",
+                "role": "system",
+            }
+        if not 1 <= rating <= 5:
+            return {
+                "type": "response",
+                "content": "Rating must be between 1 and 5.",
+                "role": "system",
+            }
+
+        feedback_text = parts[2] if len(parts) > 2 else None
+        last_iid = getattr(session, "_last_interaction_id", None)
+
+        if not self.feedback_store:
+            return {
+                "type": "response",
+                "content": "Feedback store not configured.",
+                "role": "system",
+            }
+        if not last_iid:
+            return {
+                "type": "response",
+                "content": "No recent interaction to rate.",
+                "role": "system",
+            }
+
+        self.feedback_store.add_feedback(
+            interaction_id=last_iid, rating=rating, feedback=feedback_text
+        )
+        stars = "\u2605" * rating + "\u2606" * (5 - rating)
+        return {
+            "type": "response",
+            "content": f"Rated {stars} ({rating}/5). Thank you!",
+            "role": "system",
+        }
+
+    async def _handle_personality(self, content, msg, session):
+        """Route @mention messages to a personality-specific prompt."""
+        # Try khonliang's extract_mention first (resolves built-in personas),
+        # then fall back to raw @word lookup against our registry (custom personas).
+        personality_id = extract_mention(content)
+        if not personality_id:
+            match = re.match(r"@(\w+)", content)
+            if match:
+                personality_id = match.group(1).lower()
+
+        if not personality_id:
+            return None
+
+        config = self.personality_registry.get(personality_id)
+        if not config:
+            return None
+
+        # Strip @mention from content
+        clean_content = re.sub(r"@\w+\s*", "", content).strip()
+        if not clean_content:
+            return {
+                "type": "response",
+                "content": f"**{config.name}**: What would you like me to look at?",
+                "role": "researcher",
+            }
+
+        # Use researcher role for generation with personality system prompt
+        role = self.roles.get("researcher")
+        if not role:
+            return None
+
+        ctx = role.build_context(clean_content)
+        prompt = build_prompt(personality_id, clean_content, context=ctx)
+
+        response_text, elapsed_ms = await role._timed_generate(
+            prompt=prompt, system=config.system_prompt
+        )
+
+        formatted = format_response(personality_id, response_text)
+        resp = {
+            "type": "response",
+            "content": formatted,
+            "role": "researcher",
+            "reason": f"personality:{personality_id}",
+            "session_id": session.session_id,
+            "metadata": {
+                "personality": personality_id,
+                "generation_time_ms": elapsed_ms,
+            },
+        }
+
+        # Run shared post-processing (eval, feedback, etc.)
+        return await self._post_process_response(resp, clean_content, msg, session)
+
+    async def _run_consensus(self, resp, content, evaluation, high_issues):
+        """Run consensus voting and optional debate on high-severity eval issues."""
+        response_text = resp.get("content", "")
+        try:
+            consensus_result = await self.consensus_team.evaluate(
+                subject=content,
+                context={
+                    "original_response": response_text,
+                    "query": content,
+                    "eval_issues": [i.detail for i in high_issues],
+                },
+                use_cache=False,
+            )
+
+            # Run debate if there's disagreement
+            if self.debate_orchestrator and consensus_result.votes:
+                disagreement = self.debate_orchestrator.detect_disagreement(
+                    consensus_result.votes
+                )
+                if disagreement:
+                    updated_votes = await self.debate_orchestrator.run_debate(
+                        votes=consensus_result.votes,
+                        subject=content,
+                        context={"query": content, "original_response": response_text},
+                    )
+                    consensus_result = self.consensus_team.consensus_engine.calculate_consensus(
+                        updated_votes
+                    )
+                    resp.setdefault("metadata", {})["debate_occurred"] = True
+
+            # Build response based on consensus outcome
+            resp.setdefault("metadata", {})
+            resp["metadata"]["consensus_action"] = consensus_result.action
+            resp["metadata"]["consensus_confidence"] = consensus_result.confidence
+
+            if consensus_result.action == "reject":
+                # Gather corrections from vote reasoning
+                corrections = [
+                    v.reasoning for v in consensus_result.votes
+                    if v.action == "reject"
+                ]
+                caveat = (
+                    "\n\n---\n"
+                    "**Consensus review** — this response was flagged for potential issues:\n"
+                    + "\n".join(f"- {c}" for c in corrections)
+                )
+                resp["content"] = response_text + caveat
+            elif evaluation.caveat:
+                resp["content"] = response_text + "\n\n" + evaluation.caveat
+
+            logger.info(
+                f"Consensus: {consensus_result.action} "
+                f"(confidence={consensus_result.confidence:.0%}, "
+                f"votes={len(consensus_result.votes)})"
+            )
+        except Exception:
+            logger.warning("Consensus voting failed, falling back to caveat", exc_info=True)
+            if evaluation.caveat:
+                resp["content"] = response_text + "\n\n" + evaluation.caveat
 
         return resp
 
@@ -212,8 +450,18 @@ def build_server(config: Dict[str, Any]):
     tree = GedcomTree.from_file(config["app"]["gedcom"])
 
     # Knowledge
-    store = KnowledgeStore(config["app"]["knowledge_db"])
+    knowledge_db = config["app"]["knowledge_db"]
+    store = KnowledgeStore(knowledge_db)
     librarian = Librarian(store)
+
+    # Training: feedback store + heuristic pool
+    feedback_store = None
+    heuristic_pool = None
+    training_cfg = config.get("training", {})
+    if training_cfg.get("feedback_enabled", True):
+        feedback_store = FeedbackStore(db_path=knowledge_db)
+    if training_cfg.get("heuristics_enabled", True):
+        heuristic_pool = HeuristicPool(db_path=knowledge_db)
 
     librarian.set_axiom(
         "identity",
@@ -287,14 +535,33 @@ def build_server(config: Dict[str, Any]):
     )
 
     roles = {
-        "researcher": ResearcherRole(pool, tree=tree, model_router=model_router),
-        "fact_checker": FactCheckerRole(pool, tree=tree, model_router=model_router),
+        "researcher": ResearcherRole(
+            pool, tree=tree, model_router=model_router,
+            heuristic_pool=heuristic_pool,
+        ),
+        "fact_checker": FactCheckerRole(
+            pool, tree=tree, model_router=model_router,
+            heuristic_pool=heuristic_pool,
+        ),
         "narrator": NarratorRole(
-            pool, tree=tree, knowledge_store=store, model_router=model_router
+            pool, tree=tree, knowledge_store=store,
+            model_router=model_router, heuristic_pool=heuristic_pool,
         ),
     }
 
     router = GenealogyRouter()
+
+    # Personalities
+    personality_registry = None
+    if config.get("personalities", {}).get("enabled", True):
+        personality_registry = create_genealogy_registry()
+
+    # Consensus voting + debate
+    consensus_team = None
+    debate_orchestrator = None
+    if config.get("consensus", {}).get("enabled", True):
+        consensus_team = create_consensus_team(roles, tree, config)
+        debate_orchestrator = create_debate_orchestrator(roles, tree, config)
 
     # Wire up the chat message handler with trigger checking
     def on_message(session_id, msg, response, role):
@@ -334,6 +601,11 @@ def build_server(config: Dict[str, Any]):
         research_handler=research_handler,
         evaluator=evaluator,
         intent_classifier=intent_classifier,
+        feedback_store=feedback_store,
+        heuristic_pool=heuristic_pool,
+        personality_registry=personality_registry,
+        consensus_team=consensus_team,
+        debate_orchestrator=debate_orchestrator,
     )
 
     return server, research_pool, trigger
@@ -353,6 +625,9 @@ async def run_server(config: Dict[str, Any]):
     research_pool.start(workers=2)
 
     start_web_server(host=host, port=web_port, config=config)
+
+    # Start report server (background thread)
+    start_report_server(config)
 
     logger.info(f"WebSocket: ws://{host}:{ws_port}")
     logger.info(f"Web UI: http://{host}:{web_port}")

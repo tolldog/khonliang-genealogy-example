@@ -17,6 +17,8 @@ from khonliang.knowledge import Librarian
 from khonliang.knowledge.store import Tier
 from khonliang.research import ResearchPool, ResearchTrigger
 
+from genealogy_agent.report_server import get_detector, publish_report
+
 logger = logging.getLogger(__name__)
 
 
@@ -774,28 +776,55 @@ class ResearchChatHandler:
         text = message.split(None, 1)[1].strip() if " " in message else ""
 
         if not text:
+            content = builder.knowledge_report()
+            url = publish_report(
+                content, title="Knowledge Report", created_by="analyst",
+                report_type="knowledge",
+            )
+            if url:
+                content += f"\n\n[View full report]({url})"
             return {
                 "type": "response",
-                "content": builder.knowledge_report(),
+                "content": content,
                 "role": "analyst",
                 "reason": "knowledge_report",
+                "metadata": {"report_url": url},
             }
 
         if text.lower().startswith("gaps"):
             name = text[4:].strip() if len(text) > 4 else ""
+            content = builder.gap_report(name or None)
+            title = f"Gap Analysis — {name}" if name else "Gap Analysis"
+            url = publish_report(
+                content, title=title, created_by="analyst",
+                report_type="gap_analysis",
+                metadata={"person": name} if name else None,
+            )
+            if url:
+                content += f"\n\n[View full report]({url})"
             return {
                 "type": "response",
-                "content": builder.gap_report(name or None),
+                "content": content,
                 "role": "analyst",
                 "reason": "gap_report",
+                "metadata": {"report_url": url},
             }
 
         # Person report
+        content = builder.person_report(text)
+        url = publish_report(
+            content, title=f"Report: {text}", created_by="analyst",
+            report_type="person_report",
+            metadata={"person": text},
+        )
+        if url:
+            content += f"\n\n[View full report]({url})"
         return {
             "type": "response",
-            "content": builder.person_report(text),
+            "content": content,
             "role": "analyst",
             "reason": "person_report",
+            "metadata": {"report_url": url},
         }
 
     def _handle_session_report(self) -> Dict[str, Any]:
@@ -810,11 +839,19 @@ class ResearchChatHandler:
             knowledge_store=self.librarian.store if self.librarian else None,
         )
 
+        content = builder.session_report()
+        url = publish_report(
+            content, title="Session Summary", created_by="analyst",
+            report_type="session_summary",
+        )
+        if url:
+            content += f"\n\n[View full report]({url})"
         return {
             "type": "response",
-            "content": builder.session_report(),
+            "content": content,
             "role": "analyst",
             "reason": "session_report",
+            "metadata": {"report_url": url},
         }
 
     def get_status(self) -> Dict[str, Any]:
