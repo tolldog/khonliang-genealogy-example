@@ -1,6 +1,5 @@
 """Tests for consensus voting — voting agents, team creation, debate setup."""
 
-import asyncio
 
 import pytest
 

@@ -96,7 +96,7 @@ async def run_client(url: str):
                             "rating": rating,
                         }))
                         resp = json.loads(await ws.recv())
-                        print(f"  Feedback recorded.")
+                        print("  Feedback recorded.")
                     else:
                         print("  Usage: /rate <1-5>")
                     continue

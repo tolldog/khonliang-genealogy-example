@@ -1,10 +1,9 @@
 """Tests for GEDCOM importer — sanity checks, import, export."""
 
 import pytest
-from pathlib import Path
 
 from genealogy_agent.forest import TreeForest
-from genealogy_agent.importer import GedcomImporter, ImportResult
+from genealogy_agent.importer import GedcomImporter
 from genealogy_agent.gedcom_parser import GedcomTree
 
 

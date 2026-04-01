@@ -4,8 +4,7 @@ import pytest
 
 from khonliang.consensus import AgentVote
 
-from genealogy_agent.forest import TreeForest, QualifiedPerson
-from genealogy_agent.gedcom_parser import Person
+from genealogy_agent.forest import TreeForest
 from genealogy_agent.match_agent import (
     MatchAgentRole,
     MatchAssessment,

@@ -1,8 +1,7 @@
 """Tests for CrossMatcher — heuristic person matching across trees."""
 
-import pytest
 
-from genealogy_agent.cross_matcher import CrossMatcher, MatchCandidate
+from genealogy_agent.cross_matcher import CrossMatcher
 from genealogy_agent.forest import TreeForest
 from genealogy_agent.gedcom_parser import Person
 

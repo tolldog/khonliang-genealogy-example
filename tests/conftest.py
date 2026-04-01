@@ -1,10 +1,8 @@
 """Shared test fixtures for genealogy agent tests."""
 
 import pytest
-import tempfile
-import os
 
-from genealogy_agent.gedcom_parser import GedcomTree, Person, Family
+from genealogy_agent.gedcom_parser import GedcomTree
 
 
 # Minimal GEDCOM file for testing

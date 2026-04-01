@@ -1,6 +1,5 @@
 """Tests for GEDCOM parser — persons, families, relationships, search."""
 
-from genealogy_agent.gedcom_parser import GedcomTree, Person, Family
 
 
 class TestGedcomParsing:

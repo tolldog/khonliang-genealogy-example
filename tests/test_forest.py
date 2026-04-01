@@ -1,9 +1,7 @@
 """Tests for TreeForest — multi-tree management, qualified xrefs, search."""
 
-import pytest
 
-from genealogy_agent.forest import TreeForest, QualifiedPerson, load_forest_from_config
-from genealogy_agent.gedcom_parser import GedcomTree
+from genealogy_agent.forest import TreeForest, load_forest_from_config
 
 
 class TestTreeForestLoading:

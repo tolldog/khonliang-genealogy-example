@@ -243,8 +243,6 @@ def cmd_match(args):
         return
 
     matcher = CrossMatcher(forest)
-    from genealogy_agent.forest import QualifiedPerson
-    qp_a = QualifiedPerson(tree_name=name_a, person=person_a)
 
     print(f"Matching {person_a.full_name} ({name_a}) against {name_b}:\n")
     results = []

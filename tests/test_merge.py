@@ -1,7 +1,6 @@
 """Tests for merge engine — field merging, conflict detection, strategies."""
 
 from genealogy_agent.forest import TreeForest
-from genealogy_agent.gedcom_parser import Person
 from genealogy_agent.merge import MergeEngine
 
 
