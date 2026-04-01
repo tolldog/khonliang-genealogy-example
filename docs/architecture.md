@@ -6,40 +6,51 @@ The genealogy agent is a multi-layer application built on [ollama-khonliang](htt
 
 ## Layer Diagram
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                      Integration Layer                          │
-│  WebSocket Chat Server  │  MCP Server  │  CLI Tool  │  Web UI  │
-├─────────────────────────────────────────────────────────────────┤
-│                      Command Layer                              │
-│  ResearchChatHandler (!commands)  │  Intent Classifier          │
-│  /rate  │  @mention routing  │  Session Context                 │
-├─────────────────────────────────────────────────────────────────┤
-│                      Agent Layer                                │
-│  ResearcherRole  │  FactCheckerRole  │  NarratorRole            │
-│  MatchAgentRole  │  Personalities     │  GenealogyRouter        │
-├─────────────────────────────────────────────────────────────────┤
-│                      Quality Layer                              │
-│  Self-Evaluator (DateCheck, RelationshipCheck, Speculation)     │
-│  Consensus Voting (AgentTeam)  │  Debate Orchestrator           │
-│  Heuristic Learning (HeuristicPool)                             │
-├─────────────────────────────────────────────────────────────────┤
-│                      Matching Layer                             │
-│  CrossMatcher (heuristic scoring)  │  MatchAgent (LLM eval)    │
-│  MergeEngine  │  GedcomImporter (sanity checks + export)        │
-├─────────────────────────────────────────────────────────────────┤
-│                      Knowledge Layer                            │
-│  KnowledgeStore (3-tier)  │  TripleStore  │  Librarian          │
-│  FeedbackStore  │  Research Pool + Triggers                     │
-├─────────────────────────────────────────────────────────────────┤
-│                      Data Layer                                 │
-│  GedcomTree (parser)  │  TreeForest (multi-tree manager)        │
-│  Person / Family dataclasses  │  QualifiedPerson                │
-├─────────────────────────────────────────────────────────────────┤
-│                      Infrastructure                             │
-│  ModelPool  │  OllamaClient  │  ModelRouter  │  Config          │
-│  (all from khonliang)                                           │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+  columns 1
+
+  block:Integration["Integration Layer"]
+    columns 4
+    WS["WebSocket Chat Server"] MCP["MCP Server"] CLI["CLI Tool"] WebUI["Web UI"]
+  end
+
+  block:Command["Command Layer"]
+    columns 4
+    Handler["ResearchChatHandler\n(! commands)"] Intent["Intent Classifier"] RateCmd["/rate"] MentionCmd["@mention routing"]
+  end
+
+  block:Agent["Agent Layer"]
+    columns 5
+    Researcher["ResearcherRole"] FactChecker["FactCheckerRole"] NarratorA["NarratorRole"] MatchAgentA["MatchAgentRole"] Personalities["Personalities"]
+  end
+
+  block:QualityLayer["Quality Layer"]
+    columns 3
+    SelfEval["Self-Evaluator\n(DateCheck, RelationshipCheck)"] ConsensusA["Consensus Voting\n(AgentTeam)"] HeuristicA["Heuristic Learning\n(HeuristicPool)"]
+  end
+
+  block:MatchingLayer["Matching Layer"]
+    columns 4
+    CrossMatcherA["CrossMatcher\n(heuristic scoring)"] MatchAgentB["MatchAgent\n(LLM eval)"] MergeA["MergeEngine"] ImporterA["GedcomImporter\n(sanity + export)"]
+  end
+
+  block:KnowledgeLayer["Knowledge Layer"]
+    columns 4
+    KS["KnowledgeStore\n(3-tier)"] TSA["TripleStore"] Lib["Librarian"] ResearchA["Research Pool\n+ Triggers"]
+  end
+
+  block:DataLayer["Data Layer"]
+    columns 3
+    GedcomA["GedcomTree\n(parser)"] ForestA["TreeForest\n(multi-tree)"] PersonA["Person / Family\nQualifiedPerson"]
+  end
+
+  block:Infra["Infrastructure (khonliang)"]
+    columns 4
+    Pool["ModelPool"] Client["OllamaClient"] RouterA["ModelRouter"] Config["Config"]
+  end
+
+  Integration --> Command --> Agent --> QualityLayer --> MatchingLayer --> KnowledgeLayer --> DataLayer --> Infra
 ```
 
 ## Module Map
@@ -89,56 +100,60 @@ The genealogy agent is a multi-layer application built on [ollama-khonliang](htt
 
 ## Request Flow
 
-```text
-User Message
-  │
-  ├── /rate N [feedback] ──────────── FeedbackStore.add_feedback()
-  │
-  ├── @persona query ──────────────── PersonalityRegistry.get()
-  │                                   └── build_prompt() + format_response()
-  │                                   └── _post_process_response()
-  │
-  ├── !command ────────────────────── ResearchChatHandler.handle()
-  │   ├── !trees/!load/!import ────── TreeForest / GedcomImporter
-  │   ├── !scan/!matches/!link ────── CrossMatcher / MatchAgent / TripleStore
-  │   ├── !merge/!export ──────────── MergeEngine / GedcomImporter
-  │   ├── !lookup/!search/!find ───── ResearchPool + Triggers
-  │   └── !gaps/!report/!knowledge ── TreeAnalyzer / ReportBuilder / Librarian
-  │
-  └── natural language ────────────── Intent Classifier
-                                      └── Session Context injection
-                                      └── GenealogyRouter → Role.handle()
-                                      └── Self-Evaluator
-                                          ├── passed → caveat (if any)
-                                          └── high-severity issues
-                                              └── ConsensusEngine.evaluate()
-                                                  └── DebateOrchestrator (if disagreement)
-                                      └── HeuristicPool.record_outcome()
-                                      └── FeedbackStore.log_interaction()
+```mermaid
+flowchart TD
+    Msg["User Message"]
+
+    Msg -->|"/rate N"| FB["FeedbackStore.add_feedback()"]
+    Msg -->|"@persona query"| PR["PersonalityRegistry"]
+    PR --> BP["build_prompt() + format_response()"]
+    BP --> PP["_post_process_response()"]
+
+    Msg -->|"! command"| CH["ResearchChatHandler"]
+    CH -->|"!trees / !load / !import"| Forest["TreeForest / GedcomImporter"]
+    CH -->|"!scan / !matches / !link"| Match["CrossMatcher / MatchAgent / TripleStore"]
+    CH -->|"!merge / !export"| Merge["MergeEngine / GedcomImporter"]
+    CH -->|"!lookup / !search / !find"| RP["ResearchPool + Triggers"]
+    CH -->|"!gaps / !report / !knowledge"| Analysis["TreeAnalyzer / ReportBuilder / Librarian"]
+
+    Msg -->|"natural language"| IC["Intent Classifier"]
+    IC --> SC["Session Context"]
+    SC --> GR["GenealogyRouter"]
+    GR --> Role["Role.handle()"]
+    Role --> SE["Self-Evaluator"]
+    SE -->|passed| Caveat["Append caveat"]
+    SE -->|high severity| CE["ConsensusEngine.evaluate()"]
+    CE -->|disagreement| DO["DebateOrchestrator"]
+    SE & CE & DO --> HP["HeuristicPool.record_outcome()"]
+    HP --> FS["FeedbackStore.log_interaction()"]
 ```
 
 ## Cross-Tree Matching Flow
 
-```text
-!scan tree_a tree_b
-  │
-  ├── CrossMatcher.scan()
-  │   └── Surname pre-filter → weighted scoring → MatchCandidate list
-  │
-  ├── Store candidates as possible_match triples
-  │
-  └── Top 5 → MatchAgentRole.evaluate_match()
-      └── Side-by-side comparison prompt
-      └── Structured assessment parsing (VERDICT/CONFIDENCE/EVIDENCE)
-      └── Store updated confidence in TripleStore
+```mermaid
+flowchart LR
+    subgraph Scan["!scan tree_a tree_b"]
+        direction TB
+        CM["CrossMatcher.scan()"] -->|surname filter + scoring| MC["MatchCandidate list"]
+        MC --> Store["Store as possible_match triples"]
+        MC -->|top 5| MA["MatchAgentRole.evaluate_match()"]
+        MA --> Parse["Parse VERDICT / CONFIDENCE / EVIDENCE"]
+        Parse --> Update["Update confidence in TripleStore"]
+    end
 
-!link tree_a:@I1@ tree_b:@I2@
-  └── Upgrade possible_match → same_as (confidence=1.0, source=user_confirmed)
+    subgraph Link["!link"]
+        direction TB
+        Upgrade["possible_match → same_as\n(confidence=1.0, user_confirmed)"]
+    end
 
-!merge tree_a:@I1@ into tree_b:@I2@
-  └── MergeEngine.merge_person()
-      └── Field-by-field merge with strategy
-      └── Record merged_into triple for provenance
+    subgraph MergeFlow["!merge"]
+        direction TB
+        ME["MergeEngine.merge_person()"]
+        ME --> Fields["Field-by-field merge\n(prefer_target / prefer_source / merge_all)"]
+        Fields --> Triple["Record merged_into triple"]
+    end
+
+    Scan --> Link --> MergeFlow
 ```
 
 ## Storage

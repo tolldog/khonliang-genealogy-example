@@ -386,55 +386,89 @@ API credentials (set in environment or `.env`): `GENI_API_KEY`, `GENI_API_SECRET
 
 ## Architecture
 
-```text
-User (browser/CLI/tool)
-  -> WebSocket Chat Server (GenealogyChat)
-    -> /rate command          -> FeedbackStore (log rating)
-    -> @mention               -> PersonalityRegistry -> formatted response
-    -> ! command              -> ResearchChatHandler -> ResearchPool
-    -> natural language       -> Intent Classifier (LLM-based)
-                              -> Session Context (contextvars, async-safe)
-                              -> Model Router (complexity-based model selection)
-                              -> Router -> Specialist Role (researcher/fact_checker/narrator)
-                                           |
-                                           v
-                              -> Self-Evaluator (date/relationship/speculation checks)
-                                  |
-                                  +-- passed? -> append caveat if needed
-                                  |
-                                  +-- high-severity issues?
-                                       -> Consensus Voting (all 3 roles vote)
-                                           -> Debate (if disagreement detected)
-                                           -> Final consensus decision
-                                  |
-                                  +-- uncertainty/date mismatch?
-                                       -> Auto-queue background research
-                              -> HeuristicPool (record outcome, learn rules)
-                              -> FeedbackStore (log interaction)
-                              -> Librarian (auto-index to Tier 3 knowledge)
+```mermaid
+flowchart TB
+    User["User (browser / CLI / MCP)"]
+
+    subgraph Server["GenealogyChat Server"]
+        direction TB
+        Rate["/rate N"] --> FeedbackStore
+        Mention["@mention"] --> Personalities["PersonalityRegistry"]
+        Bang["! command"] --> ChatHandler["ResearchChatHandler"]
+        NL["natural language"] --> Intent["Intent Classifier"]
+
+        Intent --> Session["Session Context"]
+        Session --> ModelRouter["Model Router"]
+        ModelRouter --> Router["GenealogyRouter"]
+
+        Router --> Researcher["ResearcherRole"]
+        Router --> FactChecker["FactCheckerRole"]
+        Router --> Narrator["NarratorRole"]
+    end
+
+    subgraph Quality["Quality Pipeline"]
+        direction TB
+        Eval["Self-Evaluator\n(dates, relationships,\nspeculation)"]
+        Eval -->|passed| Caveat["Append caveat"]
+        Eval -->|high severity| Consensus["Consensus Voting\n(all roles vote)"]
+        Consensus -->|disagreement| Debate["Debate Orchestrator"]
+        Debate --> FinalDecision["Final consensus"]
+        Eval -->|uncertainty| AutoResearch["Auto-queue\nbackground research"]
+    end
+
+    subgraph Matching["Cross-Tree Matching"]
+        direction LR
+        CrossMatcher["CrossMatcher\n(heuristic scoring)"]
+        MatchAgent["MatchAgentRole\n(LLM evaluation)"]
+        MergeEngine["MergeEngine"]
+        CrossMatcher --> MatchAgent --> MergeEngine
+    end
+
+    subgraph Research["Research Pool"]
+        direction LR
+        DDG["DDG"]
+        Google["Google"]
+        Bing["Bing"]
+        WikiTree["WikiTree"]
+        Geni["Geni.com"]
+    end
+
+    subgraph Data["Data Layer"]
+        direction LR
+        Forest["TreeForest\n(multi-tree)"]
+        KnowledgeDB[("knowledge.db")]
+    end
+
+    subgraph Storage["Storage (SQLite)"]
+        direction TB
+        KS["KnowledgeStore\n(3-tier)"]
+        TS["TripleStore\n(semantic facts +\ncross-tree links)"]
+        FS["FeedbackStore\n(interactions + ratings)"]
+        HP["HeuristicPool\n(outcomes + rules)"]
+    end
+
+    User --> Server
+    Researcher & FactChecker & Narrator --> Quality
+    ChatHandler --> Research
+    ChatHandler --> Matching
+    Personalities --> Researcher
+
+    Quality --> HP
+    Quality --> FeedbackStore
+    Matching --> TS
+    Server --> Forest
+    Forest --> KnowledgeDB
+    KnowledgeDB --- Storage
 ```
 
 ### Message Flow
 
-1. **Routing**: User input is checked for `/rate`, `@mention`, `!` commands, then classified by intent
-2. **Context**: Session history (last 5 exchanges) and tree data injected into prompt
-3. **Generation**: Role generates response with complexity-appropriate model; learned heuristic rules included in system prompt
-4. **Evaluation**: Response checked against GEDCOM data for factual accuracy
-5. **Consensus** (conditional): If high-severity issues found, all roles vote; debate runs on disagreements
-6. **Learning**: Outcome recorded for heuristic extraction; interaction logged for feedback
-
-### Data Flow
-
-```text
-Knowledge DB (SQLite)
-  +-- KnowledgeStore (3-tier: axiom/imported/derived)
-  +-- TripleStore (semantic facts)
-  +-- FeedbackStore (interactions + ratings)
-  +-- HeuristicPool (outcomes + learned rules)
-  +-- RAG documents (full-text search)
-```
-
-All stores share `data/knowledge.db` for simplicity. The `Librarian` manages the knowledge lifecycle while `FeedbackStore` and `HeuristicPool` handle the training feedback loop.
+1. **Routing** — user input checked for `/rate`, `@mention`, `!` commands, then classified by intent
+2. **Context** — session history (last 5 exchanges) and tree data injected into prompt
+3. **Generation** — role generates response with complexity-appropriate model; learned heuristic rules included in system prompt
+4. **Evaluation** — response checked against GEDCOM data for factual accuracy
+5. **Consensus** (conditional) — if high-severity issues found, all roles vote; debate runs on disagreements
+6. **Learning** — outcome recorded for heuristic extraction; interaction logged for feedback
 
 ## Project Structure
 
