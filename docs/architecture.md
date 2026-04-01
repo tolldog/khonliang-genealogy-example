@@ -4,16 +4,17 @@
 
 The genealogy agent is a multi-layer application built on [ollama-khonliang](https://github.com/tolldog/ollama-khonliang). It manages family tree data (GEDCOM files), routes user queries to specialist LLM roles, validates responses against tree data, and orchestrates cross-tree matching via consensus voting.
 
-> Components from khonliang are shown in **purple**. Genealogy-specific components are in **green**.
+> Components from khonliang are shown in **purple**. Genealogy-specific components are in **green**. Components that **extend** a khonliang base class are shown in **indigo** (mixed).
 
 ## Layer Diagram
 
 ```mermaid
 flowchart TB
     subgraph Integration["Integration Layer"]
-        WS["WebSocket\nChatServer"]:::purple
-        MCPs["MCP Server"]:::purple
-        CLI["CLI Tool"]:::green
+        WS["GenealogyChat\n(extends ChatServer)"]:::mixed
+        MCPs["GenealogyMCPServer\n(extends KhonliangMCPServer)"]:::mixed
+        CLI["CLI\n(genealogy command)"]:::green
+        ToolCLI["Tool CLI\n(for external LLMs)"]:::green
         WebUI["Web UI"]:::green
     end
 
@@ -25,15 +26,15 @@ flowchart TB
     end
 
     subgraph Agent["Agent Layer"]
-        Researcher["ResearcherRole"]:::green
-        FactChecker["FactCheckerRole"]:::green
-        NarratorA["NarratorRole"]:::green
-        MatchAgentA["MatchAgentRole"]:::green
+        Researcher["ResearcherRole\n(extends BaseRole)"]:::mixed
+        FactChecker["FactCheckerRole\n(extends BaseRole)"]:::mixed
+        NarratorA["NarratorRole\n(extends BaseRole)"]:::mixed
+        MatchAgentA["MatchAgentRole\n(extends BaseRole)"]:::mixed
         Pers["PersonalityRegistry"]:::purple
     end
 
     subgraph QualityLayer["Quality Layer"]
-        SelfEval["Self-Evaluator"]:::green
+        SelfEval["Self-Evaluator\n(extends BaseEvaluator)"]:::mixed
         ConsensusA["ConsensusEngine"]:::purple
         DebateA["DebateOrchestrator"]:::purple
         HeuristicA["HeuristicPool"]:::purple
@@ -75,6 +76,7 @@ flowchart TB
 
     classDef purple fill:#5b4a9e,stroke:#7c6bbf,color:#fff
     classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
+    classDef mixed fill:#3d3563,stroke:#6C5CE7,color:#fff
 ```
 
 ## Module Map
@@ -120,7 +122,8 @@ flowchart TB
 | `mcp_server.py` | `GenealogyMCPServer` — tree tools, forest tools, matching tools, training tools. Stdio + HTTP transports. |
 | `web_server.py` | HTTP server for web UI with theme injection. |
 | `web/index.html` | Chat interface with tree selector dropdown, import/export buttons. |
-| `tool.py` | CLI interface for external LLMs (`genealogy` command). |
+| `cli.py` | User-facing CLI (`genealogy` command via pyproject.toml entry point). Single-tree and multi-tree commands. |
+| `tool.py` | Programmatic CLI for external LLMs — structured output for piping into other tools. |
 
 ## Request Flow
 

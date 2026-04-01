@@ -386,7 +386,7 @@ API credentials (set in environment or `.env`): `GENI_API_KEY`, `GENI_API_SECRET
 
 ## Architecture
 
-> Components from khonliang are shown in **purple**. Genealogy-specific components are in **green**. Mixed components use both.
+> 🟣 **Purple** = khonliang framework &nbsp;&nbsp; 🟢 **Green** = genealogy-specific &nbsp;&nbsp; 🔮 **Indigo** = extends khonliang base class
 
 ### System Overview
 
@@ -395,13 +395,13 @@ flowchart TB
     User["User\n(browser / CLI / MCP)"]
 
     Routing["Routing &\nCommand Dispatch"]:::green
-    Agents["Agent Layer\n(4 roles + personalities)"]:::mixed
+    Agents["Agent Layer\n(4 roles extending BaseRole)"]:::mixed
     Quality["Quality Pipeline\n(eval + consensus + debate)"]:::mixed
     Matching["Cross-Tree Matching\n(heuristic + LLM)"]:::green
-    Research["Research Pool\n(web + API engines)"]:::mixed
-    Knowledge["Knowledge &\nStorage"]:::blue
+    Research["Research Pool\n(web + API engines)"]:::purple
+    Knowledge["Knowledge &\nStorage"]:::purple
     Data["Data Layer\n(GEDCOM + TreeForest)"]:::green
-    Infra["Infrastructure\n(ModelPool + Ollama)"]:::blue
+    Infra["Infrastructure\n(ModelPool + Ollama)"]:::purple
 
     User --> Routing
     Routing --> Agents
@@ -414,7 +414,7 @@ flowchart TB
     Agents --> Data
     Data --> Infra
 
-    classDef blue fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef purple fill:#5b4a9e,stroke:#7c6bbf,color:#fff
     classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
     classDef mixed fill:#3d3563,stroke:#6C5CE7,color:#fff
 ```
