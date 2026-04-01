@@ -386,79 +386,156 @@ API credentials (set in environment or `.env`): `GENI_API_KEY`, `GENI_API_SECRET
 
 ## Architecture
 
+> Components from khonliang are shown in **purple**. Genealogy-specific components are in **green**. Mixed components use both.
+
+### System Overview
+
 ```mermaid
 flowchart TB
-    User["User (browser / CLI / MCP)"]
+    User["User\n(browser / CLI / MCP)"]
 
-    subgraph Server["GenealogyChat Server"]
-        direction TB
-        Rate["/rate N"] --> FeedbackStore
-        Mention["@mention"] --> Personalities["PersonalityRegistry"]
-        Bang["! command"] --> ChatHandler["ResearchChatHandler"]
-        NL["natural language"] --> Intent["Intent Classifier"]
+    Routing["Routing &\nCommand Dispatch"]:::green
+    Agents["Agent Layer\n(4 roles + personalities)"]:::mixed
+    Quality["Quality Pipeline\n(eval + consensus + debate)"]:::mixed
+    Matching["Cross-Tree Matching\n(heuristic + LLM)"]:::green
+    Research["Research Pool\n(web + API engines)"]:::mixed
+    Knowledge["Knowledge &\nStorage"]:::blue
+    Data["Data Layer\n(GEDCOM + TreeForest)"]:::green
+    Infra["Infrastructure\n(ModelPool + Ollama)"]:::blue
 
-        Intent --> Session["Session Context"]
-        Session --> ModelRouter["Model Router"]
-        ModelRouter --> Router["GenealogyRouter"]
+    User --> Routing
+    Routing --> Agents
+    Routing --> Research
+    Routing --> Matching
+    Agents --> Quality
+    Quality --> Knowledge
+    Matching --> Knowledge
+    Research --> Knowledge
+    Agents --> Data
+    Data --> Infra
 
-        Router --> Researcher["ResearcherRole"]
-        Router --> FactChecker["FactCheckerRole"]
-        Router --> Narrator["NarratorRole"]
-    end
+    classDef blue fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
+    classDef mixed fill:#3d3563,stroke:#6C5CE7,color:#fff
+```
 
-    subgraph Quality["Quality Pipeline"]
-        direction TB
-        Eval["Self-Evaluator\n(dates, relationships,\nspeculation)"]
-        Eval -->|passed| Caveat["Append caveat"]
-        Eval -->|high severity| Consensus["Consensus Voting\n(all roles vote)"]
-        Consensus -->|disagreement| Debate["Debate Orchestrator"]
-        Debate --> FinalDecision["Final consensus"]
-        Eval -->|uncertainty| AutoResearch["Auto-queue\nbackground research"]
-    end
+### Routing & Command Dispatch
 
-    subgraph Matching["Cross-Tree Matching"]
+```mermaid
+flowchart LR
+    Msg["User Message"]
+
+    Msg -->|"/rate N"| Rate["FeedbackStore"]:::blue
+    Msg -->|"@persona"| PR["PersonalityRegistry"]:::blue
+    Msg -->|"! command"| CH["ResearchChatHandler"]:::green
+    Msg -->|"natural language"| IC["IntentClassifier"]:::green
+
+    IC --> SC["SessionContext"]:::blue
+    SC --> MR["ModelRouter"]:::blue
+    MR --> GR["GenealogyRouter"]:::green
+
+    classDef blue fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
+```
+
+### Agent Layer
+
+```mermaid
+flowchart TB
+    GR["GenealogyRouter"]:::green
+
+    GR --> R["ResearcherRole"]:::green
+    GR --> FC["FactCheckerRole"]:::green
+    GR --> N["NarratorRole"]:::green
+
+    MA["MatchAgentRole"]:::green
+
+    subgraph Personas["Personalities"]
         direction LR
-        CrossMatcher["CrossMatcher\n(heuristic scoring)"]
-        MatchAgent["MatchAgentRole\n(LLM evaluation)"]
-        MergeEngine["MergeEngine"]
-        CrossMatcher --> MatchAgent --> MergeEngine
+        G["@genealogist"]:::green
+        H["@historian"]:::green
+        D["@detective"]:::green
+        S["@skeptic"]:::green
     end
 
-    subgraph Research["Research Pool"]
-        direction LR
-        DDG["DDG"]
-        Google["Google"]
-        Bing["Bing"]
-        WikiTree["WikiTree"]
-        Geni["Geni.com"]
+    BR["BaseRole"]:::blue -.->|extends| R & FC & N & MA
+    PReg["PersonalityRegistry"]:::blue -.->|resolves| Personas
+
+    classDef blue fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
+```
+
+### Quality Pipeline
+
+```mermaid
+flowchart TB
+    Response["LLM Response"]
+
+    Response --> Eval["Self-Evaluator"]:::green
+    Eval -->|"passed"| Caveat["Append caveat\n(if any)"]
+    Eval -->|"high severity"| Team["AgentTeam.evaluate()"]:::blue
+    Team -->|"disagreement"| Debate["DebateOrchestrator"]:::blue
+    Team --> CE["ConsensusEngine"]:::blue
+    Debate --> CE
+    Eval -->|"uncertainty"| AR["Auto-queue research"]:::green
+
+    CE --> HP["HeuristicPool\n(record outcome)"]:::blue
+    Caveat --> FS["FeedbackStore\n(log interaction)"]:::blue
+
+    DR["DateCheckRule"]:::green -.-> Eval
+    RR["RelationshipCheckRule"]:::green -.-> Eval
+    SR["SpeculationRule"]:::blue -.-> Eval
+    UR["UncertaintyRule"]:::blue -.-> Eval
+
+    classDef blue fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
+```
+
+### Cross-Tree Matching
+
+```mermaid
+flowchart LR
+    subgraph Scan["Heuristic Scan"]
+        CM["CrossMatcher"]:::green
+        CM -->|"surname filter\n+ weighted scoring"| MC["MatchCandidates"]:::green
     end
 
-    subgraph Data["Data Layer"]
-        direction LR
-        Forest["TreeForest\n(multi-tree)"]
-        KnowledgeDB[("knowledge.db")]
+    subgraph Evaluate["LLM Evaluation"]
+        MA["MatchAgentRole"]:::green
+        MA -->|"side-by-side\ncomparison"| Assess["MatchAssessment\n(verdict / confidence)"]:::green
     end
 
-    subgraph Storage["Storage (SQLite)"]
-        direction TB
-        KS["KnowledgeStore\n(3-tier)"]
-        TS["TripleStore\n(semantic facts +\ncross-tree links)"]
-        FS["FeedbackStore\n(interactions + ratings)"]
-        HP["HeuristicPool\n(outcomes + rules)"]
+    subgraph Merge["Merge & Link"]
+        Link["!link → same_as\ntriple"]:::green
+        ME["MergeEngine\n(3 strategies)"]:::green
     end
 
-    User --> Server
-    Researcher & FactChecker & Narrator --> Quality
-    ChatHandler --> Research
-    ChatHandler --> Matching
-    Personalities --> Researcher
+    MC -->|"top candidates"| MA
+    Assess --> TS["TripleStore"]:::blue
+    Link --> TS
+    ME --> TS
 
-    Quality --> HP
-    Quality --> FeedbackStore
-    Matching --> TS
-    Server --> Forest
-    Forest --> KnowledgeDB
-    KnowledgeDB --- Storage
+    IMP["GedcomImporter\n(sanity checks)"]:::green --> Forest["TreeForest"]:::green
+
+    classDef blue fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
+```
+
+### Knowledge & Storage
+
+```mermaid
+flowchart TB
+    DB[("knowledge.db")]
+
+    KS["KnowledgeStore\n(axiom / imported / derived)"]:::blue --> DB
+    TS["TripleStore\n(semantic facts +\ncross-tree links)"]:::blue --> DB
+    FS["FeedbackStore\n(interactions + ratings)"]:::blue --> DB
+    HP["HeuristicPool\n(outcomes + learned rules)"]:::blue --> DB
+
+    Lib["Librarian"]:::blue --> KS
+    RP["ResearchPool"]:::blue --> Lib
+
+    classDef blue fill:#1a5276,stroke:#2980b9,color:#fff
 ```
 
 ### Message Flow

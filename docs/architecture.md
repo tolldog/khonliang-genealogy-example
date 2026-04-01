@@ -4,53 +4,77 @@
 
 The genealogy agent is a multi-layer application built on [ollama-khonliang](https://github.com/tolldog/ollama-khonliang). It manages family tree data (GEDCOM files), routes user queries to specialist LLM roles, validates responses against tree data, and orchestrates cross-tree matching via consensus voting.
 
+> Components from khonliang are shown in **purple**. Genealogy-specific components are in **green**.
+
 ## Layer Diagram
 
 ```mermaid
-block-beta
-  columns 1
+flowchart TB
+    subgraph Integration["Integration Layer"]
+        WS["WebSocket\nChatServer"]:::purple
+        MCPs["MCP Server"]:::purple
+        CLI["CLI Tool"]:::green
+        WebUI["Web UI"]:::green
+    end
 
-  block:Integration["Integration Layer"]
-    columns 4
-    WS["WebSocket Chat Server"] MCP["MCP Server"] CLI["CLI Tool"] WebUI["Web UI"]
-  end
+    subgraph Command["Command Layer"]
+        Handler["ResearchChatHandler"]:::green
+        Intent["Intent Classifier"]:::green
+        RateCmd["/rate"]:::green
+        MentionCmd["@mention"]:::green
+    end
 
-  block:Command["Command Layer"]
-    columns 4
-    Handler["ResearchChatHandler\n(! commands)"] Intent["Intent Classifier"] RateCmd["/rate"] MentionCmd["@mention routing"]
-  end
+    subgraph Agent["Agent Layer"]
+        Researcher["ResearcherRole"]:::green
+        FactChecker["FactCheckerRole"]:::green
+        NarratorA["NarratorRole"]:::green
+        MatchAgentA["MatchAgentRole"]:::green
+        Pers["PersonalityRegistry"]:::purple
+    end
 
-  block:Agent["Agent Layer"]
-    columns 5
-    Researcher["ResearcherRole"] FactChecker["FactCheckerRole"] NarratorA["NarratorRole"] MatchAgentA["MatchAgentRole"] Personalities["Personalities"]
-  end
+    subgraph QualityLayer["Quality Layer"]
+        SelfEval["Self-Evaluator"]:::green
+        ConsensusA["ConsensusEngine"]:::purple
+        DebateA["DebateOrchestrator"]:::purple
+        HeuristicA["HeuristicPool"]:::purple
+    end
 
-  block:QualityLayer["Quality Layer"]
-    columns 3
-    SelfEval["Self-Evaluator\n(DateCheck, RelationshipCheck)"] ConsensusA["Consensus Voting\n(AgentTeam)"] HeuristicA["Heuristic Learning\n(HeuristicPool)"]
-  end
+    subgraph MatchingLayer["Matching Layer"]
+        CrossMatcherA["CrossMatcher"]:::green
+        MatchAgentB["MatchAgent\n(LLM eval)"]:::green
+        MergeA["MergeEngine"]:::green
+        ImporterA["GedcomImporter"]:::green
+    end
 
-  block:MatchingLayer["Matching Layer"]
-    columns 4
-    CrossMatcherA["CrossMatcher\n(heuristic scoring)"] MatchAgentB["MatchAgent\n(LLM eval)"] MergeA["MergeEngine"] ImporterA["GedcomImporter\n(sanity + export)"]
-  end
+    subgraph KnowledgeLayer["Knowledge Layer"]
+        KS["KnowledgeStore"]:::purple
+        TSA["TripleStore"]:::purple
+        Lib["Librarian"]:::purple
+        ResearchA["ResearchPool"]:::purple
+    end
 
-  block:KnowledgeLayer["Knowledge Layer"]
-    columns 4
-    KS["KnowledgeStore\n(3-tier)"] TSA["TripleStore"] Lib["Librarian"] ResearchA["Research Pool\n+ Triggers"]
-  end
+    subgraph DataLayer["Data Layer"]
+        GedcomA["GedcomTree"]:::green
+        ForestA["TreeForest"]:::green
+    end
 
-  block:DataLayer["Data Layer"]
-    columns 3
-    GedcomA["GedcomTree\n(parser)"] ForestA["TreeForest\n(multi-tree)"] PersonA["Person / Family\nQualifiedPerson"]
-  end
+    subgraph Infra["Infrastructure (khonliang)"]
+        Pool["ModelPool"]:::purple
+        Client["OllamaClient"]:::purple
+        RouterA["ModelRouter"]:::purple
+    end
 
-  block:Infra["Infrastructure (khonliang)"]
-    columns 4
-    Pool["ModelPool"] Client["OllamaClient"] RouterA["ModelRouter"] Config["Config"]
-  end
+    Integration --> Command --> Agent
+    Agent --> QualityLayer
+    Command --> MatchingLayer
+    Command --> KnowledgeLayer
+    QualityLayer --> KnowledgeLayer
+    MatchingLayer --> KnowledgeLayer
+    Agent --> DataLayer
+    DataLayer --> Infra
 
-  Integration --> Command --> Agent --> QualityLayer --> MatchingLayer --> KnowledgeLayer --> DataLayer --> Infra
+    classDef purple fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
 ```
 
 ## Module Map
@@ -104,28 +128,31 @@ block-beta
 flowchart TD
     Msg["User Message"]
 
-    Msg -->|"/rate N"| FB["FeedbackStore.add_feedback()"]
-    Msg -->|"@persona query"| PR["PersonalityRegistry"]
-    PR --> BP["build_prompt() + format_response()"]
-    BP --> PP["_post_process_response()"]
+    Msg -->|"/rate N"| FB["FeedbackStore"]:::purple
+    Msg -->|"@persona query"| PR["PersonalityRegistry"]:::purple
+    PR --> BP["build_prompt()"]:::purple
+    BP --> PP["_post_process_response()"]:::green
 
-    Msg -->|"! command"| CH["ResearchChatHandler"]
-    CH -->|"!trees / !load / !import"| Forest["TreeForest / GedcomImporter"]
-    CH -->|"!scan / !matches / !link"| Match["CrossMatcher / MatchAgent / TripleStore"]
-    CH -->|"!merge / !export"| Merge["MergeEngine / GedcomImporter"]
-    CH -->|"!lookup / !search / !find"| RP["ResearchPool + Triggers"]
-    CH -->|"!gaps / !report / !knowledge"| Analysis["TreeAnalyzer / ReportBuilder / Librarian"]
+    Msg -->|"! command"| CH["ResearchChatHandler"]:::green
+    CH -->|"!trees / !load / !import"| Forest["TreeForest / GedcomImporter"]:::green
+    CH -->|"!scan / !matches / !link"| Match["CrossMatcher / MatchAgent"]:::green
+    CH -->|"!merge / !export"| Merge["MergeEngine"]:::green
+    CH -->|"!lookup / !search / !find"| RP["ResearchPool"]:::purple
+    CH -->|"!gaps / !report"| Analysis["TreeAnalyzer / ReportBuilder"]:::green
 
-    Msg -->|"natural language"| IC["Intent Classifier"]
-    IC --> SC["Session Context"]
-    SC --> GR["GenealogyRouter"]
-    GR --> Role["Role.handle()"]
-    Role --> SE["Self-Evaluator"]
+    Msg -->|"natural language"| IC["Intent Classifier"]:::green
+    IC --> SC["SessionContext"]:::purple
+    SC --> GR["GenealogyRouter"]:::green
+    GR --> Role["Role.handle()"]:::green
+    Role --> SE["Self-Evaluator"]:::green
     SE -->|passed| Caveat["Append caveat"]
-    SE -->|high severity| CE["ConsensusEngine.evaluate()"]
-    CE -->|disagreement| DO["DebateOrchestrator"]
-    SE & CE & DO --> HP["HeuristicPool.record_outcome()"]
-    HP --> FS["FeedbackStore.log_interaction()"]
+    SE -->|high severity| CE["ConsensusEngine"]:::purple
+    CE -->|disagreement| DO["DebateOrchestrator"]:::purple
+    SE & CE & DO --> HP["HeuristicPool"]:::purple
+    HP --> FS["FeedbackStore"]:::purple
+
+    classDef purple fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
 ```
 
 ## Cross-Tree Matching Flow
@@ -134,26 +161,36 @@ flowchart TD
 flowchart LR
     subgraph Scan["!scan tree_a tree_b"]
         direction TB
-        CM["CrossMatcher.scan()"] -->|surname filter + scoring| MC["MatchCandidate list"]
-        MC --> Store["Store as possible_match triples"]
-        MC -->|top 5| MA["MatchAgentRole.evaluate_match()"]
-        MA --> Parse["Parse VERDICT / CONFIDENCE / EVIDENCE"]
-        Parse --> Update["Update confidence in TripleStore"]
+        CM["CrossMatcher.scan()"]:::green -->|"surname filter\n+ scoring"| MC["MatchCandidates"]:::green
+        MC --> Store["Store as\npossible_match"]:::green
+        MC -->|top 5| MA["MatchAgentRole"]:::green
+        MA --> Parse["Parse assessment"]:::green
+        Parse --> Update["Update confidence"]:::green
     end
 
     subgraph Link["!link"]
         direction TB
-        Upgrade["possible_match → same_as\n(confidence=1.0, user_confirmed)"]
+        Upgrade["possible_match → same_as"]:::green
     end
 
     subgraph MergeFlow["!merge"]
         direction TB
-        ME["MergeEngine.merge_person()"]
-        ME --> Fields["Field-by-field merge\n(prefer_target / prefer_source / merge_all)"]
-        Fields --> Triple["Record merged_into triple"]
+        ME["MergeEngine"]:::green
+        ME --> Fields["Field-by-field merge"]:::green
+        Fields --> Triple["Record merged_into"]:::green
     end
 
+    TS[("TripleStore")]:::purple
+
+    Store --> TS
+    Update --> TS
+    Upgrade --> TS
+    Triple --> TS
+
     Scan --> Link --> MergeFlow
+
+    classDef purple fill:#5b4a9e,stroke:#7c6bbf,color:#fff
+    classDef green fill:#1e6e3e,stroke:#27ae60,color:#fff
 ```
 
 ## Storage
