@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "genealogy": {
-      "command": "python3",
-      "args": ["-m", "genealogy_agent.mcp_server", "--config", "config.yaml"],
-      "cwd": "/mnt/dev/ttoll/genealogy"
-    }
-  }
-}
