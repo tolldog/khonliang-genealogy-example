@@ -40,6 +40,7 @@ class GenealogyMCPServer(KhonliangMCPServer):
         importer=None, **kwargs
     ):
         super().__init__(**kwargs)
+        self.add_guide("genealogy_guide", "genealogy research workflow, evidence standards, and tree tools")
         self.tree = tree
         self.feedback_store = feedback_store
         self.heuristic_pool = heuristic_pool
@@ -54,7 +55,66 @@ class GenealogyMCPServer(KhonliangMCPServer):
         self._register_tree_tools(app)
         self._register_training_tools(app)
         self._register_forest_tools(app)
+        self._register_genealogy_guide(app)
         return app
+
+    def _register_genealogy_guide(self, app) -> None:
+        """Register the genealogy_guide tool advertised via add_guide().
+
+        add_guide() only lists the guide in the catalog; without this the
+        catalog would point at a tool that does not exist.
+        """
+        @app.tool()
+        def genealogy_guide(topic: str = "workflow") -> str:
+            """Genealogy research workflow, evidence standards, and tool catalog.
+
+            topic: workflow | evidence | tools | matching (default: workflow).
+            """
+            sections = self._genealogy_guide_sections()
+            if topic in sections:
+                return sections[topic]
+            return (
+                f"Unknown topic '{topic}'. Available: {', '.join(sections)}.\n\n"
+                + sections["workflow"]
+            )
+
+    @staticmethod
+    def _genealogy_guide_sections() -> "dict[str, str]":
+        return {
+            "workflow": (
+                "# Genealogy research workflow\n\n"
+                "1. Orient: `tree_summary` (size, families, date range); `forest_list` (all loaded trees).\n"
+                "2. Find people: `tree_search <name>` then `tree_person <name>` for full detail (parents/spouses/children/siblings).\n"
+                "3. Trace lines: `tree_ancestors` / `tree_descendants` (set generations); `tree_migration` follows a line's places over time.\n"
+                "4. Find work to do: `tree_gaps` surfaces missing/uncertain relationships; `tree_context <query>` pulls agentic-RAG evidence from historical records.\n"
+                "5. Resolve identities across trees: `match_scan` proposes cross-tree candidates, `match_confirm` accepts a reviewed one (topic=matching).\n"
+                "6. Import/export: `import_gedcom` / `export_gedcom`.\n\n"
+                "Reserve strong claims for corroborated evidence — see topic=evidence."
+            ),
+            "evidence": (
+                "# Evidence standards\n\n"
+                "- Prefer PRIMARY sources (created at the event: vital records, census, church registers) over derivative/compiled trees.\n"
+                "- A conclusion needs CORROBORATION — two independent sources beat one. Flag single-source or tree-only claims as tentative.\n"
+                "- Distinguish DIRECT evidence (a record states the fact) from INDIRECT (inferred across records); record which.\n"
+                "- Resolve conflicts explicitly, don't silently pick one; `tree_gaps` marks where evidence is thin.\n"
+                "- Cite a source for every asserted relationship/date/place. Entity-resolution matches must rest on corroborating dates/places/relationships, not name similarity alone."
+            ),
+            "tools": (
+                "# Tool catalog\n\n"
+                "TREE (active tree): tree_summary, tree_search, tree_person, tree_ancestors, tree_descendants, tree_migration, tree_context (RAG evidence), tree_gaps (missing/uncertain data).\n"
+                "FOREST (multiple trees + cross-tree): forest_list, forest_search, match_scan, match_confirm, import_gedcom, export_gedcom.\n"
+                "TRAINING / introspection: feedback_stats, heuristic_list, personality_list.\n"
+                "Plus base khonliang tools: catalog, knowledge_search, the triple_* graph tools, coding_guide, response_modes."
+            ),
+            "matching": (
+                "# Cross-tree entity resolution (matching)\n\n"
+                "The same person can appear in several trees with variant names/dates. Workflow:\n"
+                "1. `forest_list` / `forest_search` to see trees and candidates.\n"
+                "2. `match_scan` proposes cross-tree candidate matches with scores and the evidence behind each.\n"
+                "3. Review: a match needs more than name similarity — corroborating dates/places/relationships (topic=evidence). The GRA (Generative Reviewer Adjudicator) pipeline adjudicates uncertain matches.\n"
+                "4. `match_confirm` accepts a reviewed match; leave uncertain ones unmerged rather than assert a false identity."
+            ),
+        }
 
     def _register_tree_tools(self, app) -> None:
         tree = self.tree
