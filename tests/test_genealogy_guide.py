@@ -41,6 +41,7 @@ def _server():
         cross_matcher=SimpleNamespace(), importer=SimpleNamespace(),
         feedback_store=SimpleNamespace(), heuristic_pool=SimpleNamespace(),
         personality_registry=SimpleNamespace(),
+        knowledge_store=SimpleNamespace(), triple_store=SimpleNamespace(),
     )
 
 
@@ -82,9 +83,11 @@ def test_guide_omits_tools_not_registered_on_a_minimal_server():
     blob = secs["workflow"] + secs["tools"]
     for absent in ("forest_list", "forest_search", "match_scan", "match_confirm",
                    "import_gedcom", "export_gedcom", "feedback_stats",
-                   "heuristic_list", "personality_list"):
+                   "heuristic_list", "personality_list",
+                   "knowledge_search", "triple_"):  # base tools need their stores
         assert absent not in blob, f"guide advertises unregistered tool: {absent}"
-    assert "tree_search" in secs["tools"]  # tree tools always present
+    assert "tree_search" in secs["tools"]      # tree tools always present
+    assert "catalog" in secs["tools"]          # always-registered base tools remain
 
 
 def test_guide_unknown_topic_falls_back_to_workflow():

@@ -138,8 +138,15 @@ class GenealogyMCPServer(KhonliangMCPServer):
             tools.append(forest_line + ".")
         if training:
             tools.append("TRAINING / introspection: " + ", ".join(training) + ".")
-        tools.append("Plus base khonliang tools: catalog, knowledge_search, the "
-                     "triple_* graph tools, coding_guide, response_modes.")
+        # Base khonliang tools: catalog/coding_guide/response_modes are always
+        # registered; knowledge_search and the triple_* tools only when their
+        # stores are configured.
+        base = ["catalog", "coding_guide", "response_modes"]
+        if getattr(self, "knowledge_store", None):
+            base.append("knowledge_search")
+        if getattr(self, "triple_store", None):
+            base.append("the triple_* graph tools")
+        tools.append("Plus base khonliang tools: " + ", ".join(base) + ".")
 
         sections = {
             "workflow": "\n".join(wf),
