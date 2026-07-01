@@ -33,10 +33,12 @@ class _FakeApp:
 
 
 def _server():
-    # Only `tree` is required; the tool closures reference the stores but never
-    # call them at registration time, so stubs suffice.
+    # Fully-configured: every optional component present (truthy stubs), so the
+    # guide advertises the full tool set. Closures never call the stubs at
+    # registration time.
     return GenealogyMCPServer(
         tree=SimpleNamespace(), forest=SimpleNamespace(),
+        cross_matcher=SimpleNamespace(), importer=SimpleNamespace(),
         feedback_store=SimpleNamespace(), heuristic_pool=SimpleNamespace(),
         personality_registry=SimpleNamespace(),
     )
@@ -65,9 +67,24 @@ def test_create_app_registers_the_guide_tool(monkeypatch):
 
 
 def test_guide_sections_cover_all_topics_and_are_nonempty():
-    secs = GenealogyMCPServer._genealogy_guide_sections()
+    secs = _server()._genealogy_guide_sections()
     assert set(secs) >= {"workflow", "evidence", "tools", "matching"}
     assert all(v.strip() for v in secs.values())
+
+
+def test_guide_omits_tools_not_registered_on_a_minimal_server():
+    # tree-only server: forest / matching / import / training tools are NOT
+    # registered, so the guide must not advertise them (codex: avoid pointing
+    # clients at tools that don't exist).
+    srv = GenealogyMCPServer(tree=SimpleNamespace())  # all optionals None
+    secs = srv._genealogy_guide_sections()
+    assert "matching" not in secs  # matching topic only when cross_matcher+forest
+    blob = secs["workflow"] + secs["tools"]
+    for absent in ("forest_list", "forest_search", "match_scan", "match_confirm",
+                   "import_gedcom", "export_gedcom", "feedback_stats",
+                   "heuristic_list", "personality_list"):
+        assert absent not in blob, f"guide advertises unregistered tool: {absent}"
+    assert "tree_search" in secs["tools"]  # tree tools always present
 
 
 def test_guide_unknown_topic_falls_back_to_workflow():
