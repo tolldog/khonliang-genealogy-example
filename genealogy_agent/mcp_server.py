@@ -40,6 +40,7 @@ class GenealogyMCPServer(KhonliangMCPServer):
         importer=None, **kwargs
     ):
         super().__init__(**kwargs)
+        self.add_guide("genealogy_guide", "genealogy research workflow, evidence standards, and tree tools")
         self.tree = tree
         self.feedback_store = feedback_store
         self.heuristic_pool = heuristic_pool
@@ -54,7 +55,132 @@ class GenealogyMCPServer(KhonliangMCPServer):
         self._register_tree_tools(app)
         self._register_training_tools(app)
         self._register_forest_tools(app)
+        self._register_genealogy_guide(app)
         return app
+
+    def _register_genealogy_guide(self, app) -> None:
+        """Register the genealogy_guide tool advertised via add_guide().
+
+        add_guide() only lists the guide in the catalog; without this the
+        catalog would point at a tool that does not exist.
+        """
+        @app.tool()
+        def genealogy_guide(topic: str = "workflow") -> str:
+            """Genealogy research workflow, evidence standards, and tool catalog.
+
+            topic: workflow | evidence | tools | matching (default: workflow).
+            """
+            sections = self._genealogy_guide_sections()
+            if topic in sections:
+                return sections[topic]
+            return (
+                f"Unknown topic '{topic}'. Available: {', '.join(sections)}.\n\n"
+                + sections["workflow"]
+            )
+
+    def _genealogy_guide_sections(self) -> "dict[str, str]":
+        """Guide content, reflecting only the tools THIS server registered.
+
+        Forest / matching / import-export / training tools are conditional on
+        their components (self.forest, cross_matcher, importer, feedback_store,
+        heuristic_pool, personality_registry) — the guide must not point at tools
+        that aren't registered (the same broken-discovery bug this fix closes).
+        """
+        has_forest = bool(self.forest)
+        has_match = bool(self.cross_matcher and self.forest)
+        has_import = bool(self.importer and self.forest)
+        training = []
+        if self.feedback_store:
+            training.append("feedback_stats")
+        if self.heuristic_pool:
+            training.append("heuristic_list")
+        if self.personality_registry:
+            training.append("personality_list")
+
+        # --- workflow ---
+        wf = [
+            "# Genealogy research workflow\n",
+            "1. Orient: `tree_summary` (size, families, date range)"
+            + ("; `forest_list` (all loaded trees)" if has_forest else "") + ".",
+            "2. Find people: `tree_search <name>` then `tree_person <name>` for full "
+            "detail (parents/spouses/children/siblings).",
+            "3. Trace lines: `tree_ancestors` / `tree_descendants` (set generations); "
+            "`tree_migration` follows a line's places over time.",
+            "4. Inspect: `tree_gaps` surfaces missing/uncertain relationships; "
+            "`tree_context <name>` returns the raw LLM context for one person (what "
+            "the agent sees) — it takes a person NAME, not a free-text query.",
+        ]
+        n = 5
+        if has_match:
+            wf.append(f"{n}. Resolve identities across trees: `match_scan <tree_a> "
+                      "<tree_b>` proposes candidates; `match_confirm <xref_a> "
+                      "<xref_b>` records a reviewed match as a same_as triple "
+                      "(topic=matching).")
+            n += 1
+        if has_import:
+            wf.append(f"{n}. Import/export: `import_gedcom <path>` / "
+                      "`export_gedcom <tree_name>`.")
+        wf.append("\nReserve strong claims for corroborated evidence — see topic=evidence.")
+
+        # --- tools (only what's registered) ---
+        tools = [
+            "# Tool catalog (this server)\n",
+            "TREE: tree_summary, tree_search, tree_person, tree_ancestors, "
+            "tree_descendants, tree_migration, tree_context (raw context for one "
+            "person by name), tree_gaps.",
+        ]
+        if has_forest:
+            forest_line = "FOREST: forest_list, forest_search"
+            if has_match:
+                forest_line += ", match_scan, match_confirm"
+            if has_import:
+                forest_line += ", import_gedcom, export_gedcom"
+            tools.append(forest_line + ".")
+        if training:
+            tools.append("TRAINING / introspection: " + ", ".join(training) + ".")
+        # Base khonliang tools: catalog/coding_guide/response_modes are always
+        # registered; knowledge_search and the triple_* tools only when their
+        # stores are configured.
+        base = ["catalog", "coding_guide", "response_modes"]
+        if getattr(self, "knowledge_store", None):
+            base.append("knowledge_search")
+        if getattr(self, "triple_store", None):
+            base.append("the triple_* graph tools")
+        tools.append("Plus base khonliang tools: " + ", ".join(base) + ".")
+
+        sections = {
+            "workflow": "\n".join(wf),
+            "evidence": (
+                "# Evidence standards\n\n"
+                "- Prefer PRIMARY sources (created at the event: vital records, "
+                "census, church registers) over derivative/compiled trees.\n"
+                "- A conclusion needs CORROBORATION — two independent sources beat "
+                "one. Flag single-source or tree-only claims as tentative.\n"
+                "- Distinguish DIRECT evidence (a record states the fact) from "
+                "INDIRECT (inferred across records); record which.\n"
+                "- Resolve conflicts explicitly, don't silently pick one; `tree_gaps` "
+                "marks where evidence is thin.\n"
+                "- Cite a source for every asserted relationship/date/place. A "
+                "cross-tree identity claim must rest on corroborating dates/places/"
+                "relationships, not name similarity alone."
+            ),
+            "tools": "\n".join(tools),
+        }
+        if has_match:
+            sections["matching"] = (
+                "# Cross-tree entity resolution (matching)\n\n"
+                "The same person can appear in several trees with variant names/"
+                "dates. Workflow:\n"
+                "1. `forest_list` / `forest_search` to see trees and candidates.\n"
+                "2. `match_scan <tree_a> <tree_b>` proposes candidate matches with "
+                "scores and the evidence behind each.\n"
+                "3. Review: a match needs more than name similarity — corroborating "
+                "dates/places/relationships (topic=evidence). The GRA (Generative "
+                "Reviewer Adjudicator) pipeline adjudicates uncertain matches.\n"
+                "4. `match_confirm <xref_a> <xref_b>` records a reviewed match; leave "
+                "uncertain ones unmerged rather than assert a false identity."
+            )
+        return sections
 
     def _register_tree_tools(self, app) -> None:
         tree = self.tree
